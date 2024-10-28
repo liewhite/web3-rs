@@ -12,10 +12,10 @@ use revm::primitives::{ExecutionResult, TransactTo, TxEnv};
 use revm::{db::CacheDB, primitives::CancunSpec, Evm, Handler};
 
 pub struct SimulateTxMsg {
-    from: Address,
-    to: Address,
-    value: U256,
-    data: Bytes,
+    pub from: Address,
+    pub to: Address,
+    pub value: U256,
+    pub data: Bytes,
 }
 
 #[derive(Debug, Clone)]

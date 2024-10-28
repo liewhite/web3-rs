@@ -5,13 +5,12 @@ use std::{
 };
 
 use alloy::{
-    network::{EthereumWallet, TransactionBuilder}, providers::{Provider, ProviderBuilder}, rpc::types::TransactionRequest, signers::{local::PrivateKeySigner, Signer}
+    consensus::TxEnvelope, network::{EthereumWallet, TransactionBuilder}, providers::{Provider, ProviderBuilder}, rpc::types::TransactionRequest, signers::{local::PrivateKeySigner, Signer}
 };
 use alloy::eips::{eip2718::Encodable2718};
-use alloy::primitives::{hex::ToHexExt, keccak256, Bytes};
+use alloy::primitives::{hex::ToHexExt, keccak256, Bytes,U256};
 use eyre::Result;
 use rand::prelude::*;
-use revm::primitives::U256;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -43,13 +42,13 @@ impl Flashbot {
         }
     }
 
-    async fn send_bundle(&self, bundle: Vec<Bytes>, block: u64) -> Result<String> {
+    pub async fn send_bundle(&self, bundle: Vec<TxEnvelope>, block: u64) -> Result<String> {
         let mut rng = rand::thread_rng();
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let txs: Vec<String> = bundle.iter().map(|x| x.encode_hex_with_prefix()).collect();
+        let txs: Vec<String> = bundle.iter().map(|x| x.encoded_2718().encode_hex_with_prefix()).collect();
         let block_number = format!("0x{:x}", block);
         let body = FlashBotRequest {
             jsonrpc: "2.0".to_string(),
@@ -131,12 +130,11 @@ async fn test_bundle() {
         .with_gas_limit(21000)
         .with_value(U256::from(0));
     let signed = tx.build(&wallet).await.unwrap();
-    let encoded = signed.encoded_2718();
     let bn = provider.get_block_number().await.unwrap();
 
     let mev = Flashbot::new();
     let result = mev
-        .send_bundle(vec![Bytes::from_iter(encoded)], bn + 1)
+        .send_bundle(vec![signed], bn + 1)
         .await
         .unwrap();
     println!("{:?}", result)
