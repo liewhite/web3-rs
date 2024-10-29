@@ -44,7 +44,7 @@ async fn test_listen_and_bundle() {
             println!("tx: {:?}", tx);
             let return_value = tx.value / U256::from(10);
             // 本地模拟bundle
-            let (success, results) = simulator.sim_msgs(vec![
+            let (success, results) = simulator.simulate(&vec![
                 SimulateTxMsg {
                     from: tx.from,
                     to: tx.to.unwrap(),
