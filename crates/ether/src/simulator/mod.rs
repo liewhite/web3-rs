@@ -41,6 +41,17 @@ impl From<Bytes> for SimulateTxMsg {
         }
     }
 }
+impl From<TxEnvelope> for SimulateTxMsg {
+    fn from(decoded: TxEnvelope) -> Self {
+        SimulateTxMsg {
+            from: decoded.recover_signer().unwrap(),
+            to: decoded.kind().to().unwrap().clone(),
+            value: decoded.value(),
+            data: decoded.input().clone(),
+        }
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub struct Simulator {
