@@ -63,7 +63,7 @@ impl Simulator {
         let backend = shared_backend(url);
         Simulator { backend: backend }
     }
-    pub fn simulate<T>(&self, bundle: &Vec<T>) -> (bool, Vec<Result<ExecutionResult>>)
+    pub fn simulate<T>(&self, bundle: Vec<T>) -> (bool, Vec<Result<ExecutionResult>>)
     where
         SimulateTxMsg: From<T>,
         T: Clone,
@@ -132,7 +132,7 @@ fn test_bundle() {
             data: Bytes::new(),
         });
     }
-    let (success, sim_result) = simulator.simulate(&bundle);
+    let (success, sim_result) = simulator.simulate(bundle);
     println!("{:?}", success);
     for ele in sim_result {
         println!("{:?}", ele);
