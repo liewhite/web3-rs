@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, sync::Arc};
 use alloy::consensus::{Transaction, TxEnvelope};
 use alloy::eips::eip2718::Decodable2718;
 use alloy::primitives::{Address, Bytes, U256};
-use alloy::rpc::types::TransactionRequest;
+use alloy::rpc::types::{self, TransactionRequest};
 use alloy::{hex::FromHex as _, network::TransactionBuilder};
 use eyre::{Context, Result};
 use foundry_common::provider::ProviderBuilder;
@@ -52,6 +52,16 @@ impl From<TxEnvelope> for SimulateTxMsg {
     }
 }
 
+impl From<types::Transaction> for SimulateTxMsg {
+    fn from(tx: types::Transaction) -> Self {
+        SimulateTxMsg {
+            from: tx.from,
+            to: tx.to.unwrap(),
+            value: tx.value,
+            data: tx.input,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Simulator {
@@ -89,9 +99,7 @@ impl Simulator {
         }
         return (results.iter().all(|x| x.is_ok()), results);
     }
-
 }
-
 
 pub fn shared_backend(url: &str) -> SharedBackend {
     let provider = Arc::new(ProviderBuilder::new(url).build().expect("backend build"));
