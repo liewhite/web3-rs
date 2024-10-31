@@ -17,6 +17,7 @@ use futures::{FutureExt, StreamExt};
 use revm::primitives::Address;
 
 use crate::{
+    abi::aave,
     mev::flashbot::Flashbot,
     simulator::{SimulateTxMsg, Simulator},
 };
@@ -26,6 +27,12 @@ use crate::{
  */
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_listen_and_bundle() {
+    aave::Pool::supplyCall {
+        asset: todo!(),
+        amount: todo!(),
+        onBehalfOf: todo!(),
+        referralCode: todo!(),
+    };
     let private_key = "";
     let sender = Flashbot::new();
     let simulator = Simulator::new("");
