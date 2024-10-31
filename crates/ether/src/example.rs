@@ -38,7 +38,8 @@ async fn test_listen_and_bundle() {
         .await
         .unwrap()
         .into_stream();
-    let signer = EthereumWallet::from(PrivateKeySigner::from_str(private_key).unwrap());
+    // let signer = EthereumWallet::from(PrivateKeySigner::from_str(private_key).unwrap());
+    let signer: EthereumWallet = PrivateKeySigner::from_str(private_key).unwrap().into();
     while let Some(tx) = tx_stream.next().await {
         if tx.to.is_some() && tx.to.unwrap() == signer.default_signer().address() {
             println!("tx: {:?}", tx);
