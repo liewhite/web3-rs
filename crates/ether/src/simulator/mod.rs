@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use alloy::consensus::{Transaction, TxEnvelope};
 use alloy::eips::eip2718::Decodable2718;
+use alloy::eips::BlockId;
 use alloy::primitives::{Address, Bytes, U256};
 use alloy::rpc::types::{self, TransactionRequest};
 use alloy::{hex::FromHex as _, network::TransactionBuilder};
@@ -65,7 +66,7 @@ impl From<types::Transaction> for SimulateTxMsg {
 
 #[derive(Debug, Clone)]
 pub struct Simulator {
-    backend: SharedBackend,
+    pub backend: SharedBackend,
 }
 
 impl Simulator {
@@ -73,6 +74,11 @@ impl Simulator {
         let backend = shared_backend(url);
         Simulator { backend: backend }
     }
+
+    pub fn fork(&self, block: BlockId) -> eyre::Result<()> {
+        self.backend.set_pinned_block(block)
+    }
+
     pub fn simulate<T>(&self, bundle: Vec<T>) -> (bool, Vec<Result<ExecutionResult>>)
     where
         SimulateTxMsg: From<T>,
@@ -82,7 +88,8 @@ impl Simulator {
             .iter()
             .map(|x| SimulateTxMsg::from(x.clone()))
             .collect();
-        let mut evm = new_evm(self.backend.clone());
+        let mut evm = self.new_evm();
+        // evm.block_mut().number
         let mut results = vec![];
         for ele in bundle {
             let env = evm.context.evm.env.as_mut();
@@ -99,9 +106,17 @@ impl Simulator {
         }
         return (results.iter().all(|x| x.is_ok()), results);
     }
+
+    pub fn new_evm(&self) -> revm::Evm<'static, (), CacheDB<SharedBackend>> {
+        let db = CacheDB::new(self.backend.clone());
+        let ctx = revm::Context::new_with_db(db);
+        let evm: Evm<'static, (), CacheDB<SharedBackend>> =
+            revm::Evm::new(ctx, Handler::mainnet::<CancunSpec>());
+        return evm;
+    }
 }
 
-pub fn shared_backend(url: &str) -> SharedBackend {
+fn shared_backend(url: &str) -> SharedBackend {
     let provider = Arc::new(ProviderBuilder::new(url).build().expect("backend build"));
 
     let shared_backend = SharedBackend::spawn_backend_thread(
@@ -117,14 +132,6 @@ pub fn shared_backend(url: &str) -> SharedBackend {
         None,
     );
     shared_backend
-}
-
-pub fn new_evm(backend: SharedBackend) -> revm::Evm<'static, (), CacheDB<SharedBackend>> {
-    let db = CacheDB::new(backend);
-    let ctx = revm::Context::new_with_db(db);
-    let evm: Evm<'static, (), CacheDB<SharedBackend>> =
-        revm::Evm::new(ctx, Handler::mainnet::<CancunSpec>());
-    return evm;
 }
 
 #[test]
@@ -145,4 +152,20 @@ fn test_bundle() {
     for ele in sim_result {
         println!("{:?}", ele);
     }
+}
+
+#[test]
+fn test_fork() {
+    let simulator = Simulator::new("");
+    simulator
+        .fork(BlockId::Number(types::BlockNumberOrTag::Number(11084496)))
+        .unwrap();
+    let mut instance = simulator.new_evm();
+    let acc = instance
+        .db_mut()
+        .load_account(Address::from_hex("").unwrap())
+        .unwrap();
+    acc.info.balance = U256::from(1_u128);
+    let b = acc.info.balance;
+    println!("{}", b);
 }
