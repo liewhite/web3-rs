@@ -19,7 +19,7 @@ use revm::primitives::Address;
 use crate::{
     abi::aave,
     mev::flashbot::Flashbot,
-    simulator::{SimulateTxMsg, Simulator},
+    simulator::{shared_backend, SimulateTxMsg, Simulator},
 };
 
 /**
@@ -35,7 +35,8 @@ async fn test_listen_and_bundle() {
     };
     let private_key = "";
     let sender = Flashbot::new();
-    let simulator = Simulator::new("");
+    let backend = shared_backend("url");
+    let simulator = Simulator::new(backend);
     let cli = ProviderBuilder::new()
         .on_ws(WsConnect::new(""))
         .await
