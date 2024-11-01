@@ -105,10 +105,15 @@ impl Simulator {
         env.tx.value = ele.value;
         env.tx.transact_to = to.clone();
         let result = self.evm.transact_commit();
+        let success = if result.is_ok() && result.as_ref().unwrap().is_success() {
+            "✅"
+        } else {
+            "❌"
+        };
         let elapsed = start.elapsed().unwrap();
         info!(
-            "simulation elapsed {:?} request: {:?} result: {:?}",
-            elapsed, ele, result
+            "{} simulation elapsed {:?} request: {:?} result: {:?}",
+            success, elapsed, ele, result
         );
         result.wrap_err("simulating error")
     }
