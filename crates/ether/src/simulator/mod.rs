@@ -10,7 +10,7 @@ use alloy::{hex::FromHex as _, network::TransactionBuilder};
 use eyre::{Context, Result};
 use foundry_common::provider::ProviderBuilder;
 use foundry_evm::backend::{BlockchainDb, BlockchainDbMeta, SharedBackend};
-use log::debug;
+use log::{debug, info};
 use revm::inspectors::CustomPrintTracer;
 use revm::primitives::{BlockEnv, ExecutionResult, TransactTo, TxEnv, TxKind};
 use revm::Inspector;
@@ -106,7 +106,7 @@ impl Simulator {
         env.tx.transact_to = to.clone();
         let result = self.evm.transact_commit();
         let elapsed = start.elapsed().unwrap();
-        debug!(
+        info!(
             "simulation elapsed {:?} request: {:?} result: {:?}",
             elapsed, ele, result
         );
