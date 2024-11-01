@@ -32,7 +32,7 @@ impl From<TransactionRequest> for SimulateTxMsg {
         SimulateTxMsg {
             from: x.from.unwrap(),
             to: x.to.unwrap().to().unwrap().clone(),
-            value: x.value.unwrap(),
+            value: x.value.unwrap_or(U256::from(0_u32)),
             data: x.input.input().unwrap().clone(),
         }
     }
