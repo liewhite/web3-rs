@@ -1,3 +1,4 @@
+use std::time::SystemTime;
 use std::{collections::BTreeSet, sync::Arc};
 
 use alloy::consensus::{Transaction, TxEnvelope};
@@ -9,6 +10,7 @@ use alloy::{hex::FromHex as _, network::TransactionBuilder};
 use eyre::{Context, Result};
 use foundry_common::provider::ProviderBuilder;
 use foundry_evm::backend::{BlockchainDb, BlockchainDbMeta, SharedBackend};
+use log::debug;
 use revm::inspectors::CustomPrintTracer;
 use revm::primitives::{BlockEnv, ExecutionResult, TransactTo, TxEnv, TxKind};
 use revm::Inspector;
@@ -91,6 +93,7 @@ impl Simulator {
         SimulateTxMsg: From<T>,
         T: Clone,
     {
+        let start = SystemTime::now();
         let ele: SimulateTxMsg = tx.into();
         let to = TxKind::Call(ele.to);
         let data: Bytes = ele.data.clone();
@@ -102,6 +105,11 @@ impl Simulator {
         env.tx.value = ele.value;
         env.tx.transact_to = to.clone();
         let result = self.evm.transact_commit();
+        let elapsed = start.elapsed().unwrap();
+        debug!(
+            "simulation elapsed {:?} request: {:?} result: {:?}",
+            elapsed, ele, result
+        );
         result.wrap_err("simulating error")
     }
 }
@@ -125,12 +133,10 @@ pub fn shared_backend(url: &str) -> SharedBackend {
 
 #[test]
 fn test_bundle() {
-    let backend =
-        shared_backend("");
+    let backend = shared_backend("");
     // backend.set_pinned_block(21087781).unwrap();
     let mut block_env = BlockEnv::default();
     block_env.timestamp = U256::from(u64::MAX);
-
 
     let mut simulator = Simulator::new(backend, block_env);
     simulator.evm.cfg_mut().disable_eip3607 = true;
