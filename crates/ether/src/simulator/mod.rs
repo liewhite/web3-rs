@@ -4,13 +4,16 @@ use alloy::consensus::{Transaction, TxEnvelope};
 use alloy::eips::eip2718::Decodable2718;
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, Bytes, U256};
-use alloy::rpc::types::{self, TransactionRequest};
+use alloy::rpc::types::{self, Block, TransactionRequest};
 use alloy::{hex::FromHex as _, network::TransactionBuilder};
 use eyre::{Context, Result};
 use foundry_common::provider::ProviderBuilder;
 use foundry_evm::backend::{BlockchainDb, BlockchainDbMeta, SharedBackend};
-use revm::primitives::{ExecutionResult, TransactTo, TxEnv};
+use revm::inspectors::CustomPrintTracer;
+use revm::primitives::{BlockEnv, ExecutionResult, TransactTo, TxEnv, TxKind};
+use revm::Inspector;
 use revm::{db::CacheDB, primitives::CancunSpec, Evm, Handler};
+use std::str::FromStr;
 
 use crate::abi::argus::Argus::rescueCall;
 
@@ -73,55 +76,34 @@ pub struct Simulator {
 }
 
 impl Simulator {
-    pub fn new(backend: SharedBackend) -> Simulator {
-        // let backend = shared_backend(url);
-        let evm = new_evm(backend);
+    pub fn new(backend: SharedBackend, block_env: BlockEnv) -> Simulator {
+        let db = CacheDB::new(backend.clone());
+        let mut evm = revm::Evm::builder()
+            .with_db(db)
+            .with_handler(Handler::mainnet::<CancunSpec>())
+            // .with_external_context(CustomPrintTracer::default())
+            .build();
+        evm.context.evm.env.block = block_env;
         Simulator { evm: evm }
     }
-    pub fn simulate<T>(&mut self, bundle: Vec<T>) -> (bool, Vec<Result<ExecutionResult>>)
+    pub fn exec_transaction<T>(&mut self, tx: T) -> Result<ExecutionResult>
     where
         SimulateTxMsg: From<T>,
         T: Clone,
     {
-        let mut results = vec![];
-        for ele in bundle {
-            let env = self.evm.context.evm.env.as_mut();
-            env.clear();
-            let result = simulate_on_evm(&mut self.evm, ele);
-            results.push(result.wrap_err("simulation error"));
-        }
-        return (results.iter().all(|x| x.is_ok()), results);
+        let ele: SimulateTxMsg = tx.into();
+        let to = TxKind::Call(ele.to);
+        let data: Bytes = ele.data.clone();
+
+        let env = self.evm.context.evm.env.as_mut();
+        env.tx = TxEnv::default();
+        env.tx.caller = ele.from;
+        env.tx.data = data.clone();
+        env.tx.value = ele.value;
+        env.tx.transact_to = to.clone();
+        let result = self.evm.transact_commit();
+        result.wrap_err("simulating error")
     }
-}
-
-pub fn new_evm(backend: SharedBackend) -> revm::Evm<'static, (), CacheDB<SharedBackend>> {
-    let db = CacheDB::new(backend.clone());
-    let ctx = revm::Context::new_with_db(db);
-    let evm: Evm<'static, (), CacheDB<SharedBackend>> =
-        revm::Evm::new(ctx, Handler::mainnet::<CancunSpec>());
-    return evm;
-}
-fn simulate_on_evm<T>(
-    evm: &mut Evm<'static, (), CacheDB<SharedBackend>>,
-    tx: T,
-) -> Result<ExecutionResult>
-where
-    SimulateTxMsg: From<T>,
-    T: Clone,
-{
-    let ele: SimulateTxMsg = tx.into();
-    let env = evm.context.evm.env.as_mut();
-    env.clear();
-    let to = TransactTo::Call(ele.to);
-    let data: Bytes = ele.data.clone();
-
-    env.tx = TxEnv::default();
-    env.tx.caller = ele.from;
-    env.tx.data = data.clone();
-    env.tx.value = ele.value;
-    env.tx.transact_to = to.clone();
-    let result = evm.transact_commit();
-    result.wrap_err("simulating error")
 }
 
 pub fn shared_backend(url: &str) -> SharedBackend {
@@ -143,21 +125,24 @@ pub fn shared_backend(url: &str) -> SharedBackend {
 
 #[test]
 fn test_bundle() {
-    let backend = shared_backend("url");
-    let mut simulator = Simulator::new(backend);
-    let mut bundle = vec![];
-    let from = Address::from_hex("").unwrap();
-    for i in 0..11 {
-        bundle.push(SimulateTxMsg {
-            from: from,
-            to: Address::from_hex("").unwrap(),
-            value: U256::from_str_radix("10000000000000000", 10).unwrap(),
-            data: Bytes::new(),
-        });
-    }
-    let (success, sim_result) = simulator.simulate(bundle);
-    println!("{:?}", success);
-    for ele in sim_result {
-        println!("{:?}", ele);
-    }
+    let backend =
+        shared_backend("");
+    // backend.set_pinned_block(21087781).unwrap();
+    let mut block_env = BlockEnv::default();
+    block_env.timestamp = U256::from(u64::MAX);
+
+
+    let mut simulator = Simulator::new(backend, block_env);
+    simulator.evm.cfg_mut().disable_eip3607 = true;
+    // 开额度
+    let update_cap_call = SimulateTxMsg {
+        from: Address::from_hex("0x47c71dFEB55Ebaa431Ae3fbF99Ea50e0D3d30fA8").unwrap(),
+        to: Address::from_hex("0x3843b29118fFC18d5d12EE079d0324E1bF115e69").unwrap(),
+        value: U256::ZERO,
+        data: Bytes::from_hex("0x55caa163000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000020000000000000000000000007f39c581f595b53c5cb19bd0b3f8da6c935e2ca0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd5000000000000000000000000000000000000000000000000000000000000dac0000000000000000000000000bf5495efe5db9ce00f80364c8b423567e58d2110000000000000000000000000000000000000000000000000000000000000ea60ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd5").unwrap(),
+    };
+    // println!("{:?}", update_cap_call);
+
+    let result = simulator.exec_transaction(update_cap_call);
+    println!("{:?}", result);
 }
