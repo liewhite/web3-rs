@@ -12,6 +12,8 @@ use foundry_evm::backend::{BlockchainDb, BlockchainDbMeta, SharedBackend};
 use revm::primitives::{ExecutionResult, TransactTo, TxEnv};
 use revm::{db::CacheDB, primitives::CancunSpec, Evm, Handler};
 
+use crate::abi::argus::Argus::rescueCall;
+
 #[derive(Debug, Clone)]
 pub struct SimulateTxMsg {
     pub from: Address,
@@ -76,28 +78,16 @@ impl Simulator {
         let evm = new_evm(backend);
         Simulator { evm: evm }
     }
-    // pub fn simulate_with_evm(evm: Evm<>)
     pub fn simulate<T>(&mut self, bundle: Vec<T>) -> (bool, Vec<Result<ExecutionResult>>)
     where
         SimulateTxMsg: From<T>,
         T: Clone,
     {
-        let bundle: Vec<SimulateTxMsg> = bundle
-            .iter()
-            .map(|x| SimulateTxMsg::from(x.clone()))
-            .collect();
         let mut results = vec![];
         for ele in bundle {
             let env = self.evm.context.evm.env.as_mut();
-            let to = TransactTo::Call(ele.to);
-            let data: Bytes = ele.data.clone();
-
-            env.tx = TxEnv::default();
-            env.tx.caller = ele.from;
-            env.tx.data = data.clone();
-            env.tx.value = ele.value;
-            env.tx.transact_to = to.clone();
-            let result = self.evm.transact_commit();
+            env.clear();
+            let result = simulate_on_evm(&mut self.evm, ele);
             results.push(result.wrap_err("simulation error"));
         }
         return (results.iter().all(|x| x.is_ok()), results);
@@ -121,6 +111,7 @@ where
 {
     let ele: SimulateTxMsg = tx.into();
     let env = evm.context.evm.env.as_mut();
+    env.clear();
     let to = TransactTo::Call(ele.to);
     let data: Bytes = ele.data.clone();
 
