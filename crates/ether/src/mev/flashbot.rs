@@ -4,11 +4,15 @@ use std::{
     time::{self, SystemTime, UNIX_EPOCH},
 };
 
+use alloy::eips::eip2718::Encodable2718;
+use alloy::primitives::{hex::ToHexExt, keccak256, Bytes, U256};
 use alloy::{
-    consensus::TxEnvelope, network::{EthereumWallet, TransactionBuilder}, providers::{Provider, ProviderBuilder}, rpc::types::TransactionRequest, signers::{local::PrivateKeySigner, Signer}
+    consensus::TxEnvelope,
+    network::{EthereumWallet, TransactionBuilder},
+    providers::{Provider, ProviderBuilder},
+    rpc::types::TransactionRequest,
+    signers::{local::PrivateKeySigner, Signer},
 };
-use alloy::eips::{eip2718::Encodable2718};
-use alloy::primitives::{hex::ToHexExt, keccak256, Bytes,U256};
 use eyre::Result;
 use rand::prelude::*;
 use serde::Serialize;
@@ -43,16 +47,19 @@ impl Flashbot {
     }
 
     pub async fn send_bundle(&self, bundle: Vec<TxEnvelope>, block: u64) -> Result<String> {
-        let mut rng = rand::thread_rng();
+        let id = { rand::thread_rng().gen() };
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let txs: Vec<String> = bundle.iter().map(|x| x.encoded_2718().encode_hex_with_prefix()).collect();
+        let txs: Vec<String> = bundle
+            .iter()
+            .map(|x| x.encoded_2718().encode_hex_with_prefix())
+            .collect();
         let block_number = format!("0x{:x}", block);
         let body = FlashBotRequest {
             jsonrpc: "2.0".to_string(),
-            id: rng.gen(),
+            id: id,
             method: "eth_sendBundle".to_string(),
             params: vec![FlashBotRequestParams {
                 txs: txs,
@@ -109,33 +116,32 @@ impl Flashbot {
             .await
             .map_err(|e| e.into())
     }
-
 }
 
 #[tokio::test]
 async fn test_bundle() {
-    let signer = PrivateKeySigner::from_str("").unwrap();
-    let wallet = EthereumWallet::from(signer);
+    tokio::spawn(async move {
+        let signer = PrivateKeySigner::from_str("").unwrap();
+        let wallet = EthereumWallet::from(signer);
 
-    let provider = ProviderBuilder::new().on_builtin("").await.unwrap();
-    let nonce = provider
-        .get_transaction_count(wallet.default_signer().address())
-        .await
-        .unwrap();
-    let tx = TransactionRequest::default()
-        .with_from(wallet.default_signer().address())
-        .with_to(wallet.default_signer().address())
-        .with_gas_price(u128::from_str("50000000000").unwrap())
-        .with_nonce(nonce)
-        .with_gas_limit(21000)
-        .with_value(U256::from(0));
-    let signed = tx.build(&wallet).await.unwrap();
-    let bn = provider.get_block_number().await.unwrap();
+        let provider = ProviderBuilder::new().on_builtin("").await.unwrap();
+        let nonce = provider
+            .get_transaction_count(wallet.default_signer().address())
+            .await
+            .unwrap();
+        let tx = TransactionRequest::default()
+            .with_from(wallet.default_signer().address())
+            .with_to(wallet.default_signer().address())
+            .with_gas_price(u128::from_str("50000000000").unwrap())
+            .with_nonce(nonce)
+            .with_gas_limit(21000)
+            .with_value(U256::from(0));
+        let signed = tx.build(&wallet).await.unwrap();
+        let bn = provider.get_block_number().await.unwrap();
 
-    let mev = Flashbot::new();
-    let result = mev
-        .send_bundle(vec![signed], bn + 1)
-        .await
-        .unwrap();
-    println!("{:?}", result)
+        let mev = Flashbot::new();
+        let result = mev.send_bundle(vec![signed], bn + 1).await.unwrap();
+        println!("{:?}", result)
+    })
+    .await;
 }

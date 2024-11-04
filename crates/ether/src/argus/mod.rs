@@ -22,7 +22,7 @@ fn transaction_to_calldata_item(tx: TransactionRequest) -> Argus::CallData {
 }
 
 pub fn build_transaction(argus_module: Address, tx: TransactionRequest) -> TransactionRequest {
-    let calldata = transaction_to_calldata_item(tx.clone());
+    let calldata:Argus::CallData = transaction_to_calldata_item(tx.clone());
     tx.with_to(argus_module)
         .with_value(U256::from(0))
         .with_input(calldata.abi_encode())
@@ -43,5 +43,5 @@ pub fn build_transactions(
     TransactionRequest::default()
         .with_to(argus_module)
         .with_value(U256::from(0))
-        .with_input(data.abi_encode())
+        .with_call(&data)
 }
