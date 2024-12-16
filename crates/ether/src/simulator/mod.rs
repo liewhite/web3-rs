@@ -107,10 +107,28 @@ impl Simulator {
             success, elapsed, result
         );
         let result = result.wrap_err("deploy error")?;
-        let addr = result
-            .output()
-            .map(|x| Address::from_slice(x))
-            .ok_or(eyre!(""));
+        let addr: Result<Address> = match result {
+            ExecutionResult::Success {
+                reason,
+                gas_used,
+                gas_refunded,
+                logs,
+                output,
+            } => match output {
+                revm::primitives::Output::Call(bytes) => {
+                    eyre::Result::Err(eyre!("depoly failed, it's a call"))
+                }
+                revm::primitives::Output::Create(bytes, address) => {
+                    eyre::Result::Ok(address.unwrap())
+                }
+            },
+            ExecutionResult::Revert { gas_used, output } => {
+                eyre::Result::Err(eyre!("deploy failed {} {:?}", gas_used, output))
+            }
+            ExecutionResult::Halt { reason, gas_used } => {
+                eyre::Result::Err(eyre!("deploy out of gas {:?} {}", reason, gas_used))
+            }
+        };
         addr
     }
 
