@@ -3,7 +3,6 @@ use alloy::sol_types::{SolCall, SolValue};
 use alloy::{network::TransactionBuilder, rpc::types::TransactionRequest};
 
 use crate::abi::argus::Argus;
-use eyre::{Error, Report, Result};
 
 fn transaction_to_calldata_item(tx: TransactionRequest) -> Argus::CallData {
     let origin_to = tx.to.unwrap();
@@ -22,10 +21,11 @@ fn transaction_to_calldata_item(tx: TransactionRequest) -> Argus::CallData {
 }
 
 pub fn build_transaction(argus_module: Address, tx: TransactionRequest) -> TransactionRequest {
-    let calldata:Argus::CallData = transaction_to_calldata_item(tx.clone());
+    let calldata: Argus::CallData = transaction_to_calldata_item(tx.clone());
+    let call = Argus::execTransactionCall { callData: calldata };
     tx.with_to(argus_module)
         .with_value(U256::from(0))
-        .with_input(calldata.abi_encode())
+        .with_call(&call)
 }
 
 pub fn build_transactions(
