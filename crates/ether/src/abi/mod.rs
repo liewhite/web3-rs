@@ -4,3 +4,5 @@ pub mod univ3;
 pub mod multicall;
 pub mod aave;
 pub mod argus;
+pub mod wsteth;
+pub mod rseth;
