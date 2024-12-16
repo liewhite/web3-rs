@@ -7,7 +7,7 @@ use alloy::eips::BlockId;
 use alloy::primitives::{Address, Bytes, U256};
 use alloy::rpc::types::{self, Block, TransactionRequest};
 use alloy::{hex::FromHex as _, network::TransactionBuilder};
-use eyre::{Context, Result};
+use eyre::{eyre, Context, Result};
 use foundry_common::provider::ProviderBuilder;
 use foundry_evm::backend::{BlockchainDb, BlockchainDbMeta, SharedBackend};
 use log::{debug, info};
@@ -88,6 +88,32 @@ impl Simulator {
         evm.context.evm.env.block = block_env;
         Simulator { evm: evm }
     }
+    pub fn deploy_contract<T>(&mut self, from: Address, bytecode: Bytes) -> Result<Address> {
+        let start = SystemTime::now();
+        let env = self.evm.context.evm.env.as_mut();
+        env.tx = TxEnv::default();
+        env.tx.caller = from;
+        env.tx.data = bytecode;
+        env.tx.transact_to = TransactTo::Create;
+        let result = self.evm.transact_commit();
+        let success = if result.is_ok() && result.as_ref().unwrap().is_success() {
+            "✅"
+        } else {
+            "❌"
+        };
+        let elapsed = start.elapsed().unwrap();
+        info!(
+            "{} depoly contract elapsed {:?} result: {:?}",
+            success, elapsed, result
+        );
+        let result = result.wrap_err("deploy error")?;
+        let addr = result
+            .output()
+            .map(|x| Address::from_slice(x))
+            .ok_or(eyre!(""));
+        addr
+    }
+
     pub fn exec_transaction<T>(&mut self, tx: T) -> Result<ExecutionResult>
     where
         SimulateTxMsg: From<T>,
