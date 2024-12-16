@@ -88,7 +88,7 @@ impl Simulator {
         evm.context.evm.env.block = block_env;
         Simulator { evm: evm }
     }
-    pub fn deploy_contract<T>(&mut self, from: Address, bytecode: Bytes) -> Result<Address> {
+    pub fn deploy_contract(&mut self, from: Address, bytecode: Bytes) -> Result<Address> {
         let start = SystemTime::now();
         let env = self.evm.context.evm.env.as_mut();
         env.tx = TxEnv::default();
