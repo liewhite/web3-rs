@@ -13,7 +13,7 @@ use alloy::sol_types::SolCall;
 use alloy::{providers::RootProvider, transports::BoxTransport};
 use eyre::Result;
 use eyre::*;
-use revm::primitives::{fixed_bytes, Address, Bytes, U256};
+use revm::primitives::{fixed_bytes, Address, Bytes, TxKind, U256};
 use serde_json::Value;
 use tokio::fs;
 
@@ -74,7 +74,7 @@ impl Argus {
             .clone();
         simulator.exec_transaction(SimulateTxMsg {
             from: self.safe_instance.address().clone(),
-            to: self.role_manager_instance.address().clone(),
+            to: Some(self.role_manager_instance.address().clone()).into(),
             value: U256::ZERO,
             data: add_role,
         })?;
@@ -85,7 +85,7 @@ impl Argus {
             .clone();
         simulator.exec_transaction(SimulateTxMsg {
             from: self.safe_instance.address().clone(),
-            to: self.role_manager_instance.address().clone(),
+            to: Some(self.role_manager_instance.address().clone()).into(),
             value: U256::ZERO,
             data: grant_role,
         })?;
@@ -96,7 +96,7 @@ impl Argus {
             .clone();
         simulator.exec_transaction(SimulateTxMsg {
             from: self.safe_instance.address().clone(),
-            to: self.argus_instance.address().clone(),
+            to: Some(self.argus_instance.address().clone()).into(),
             value: U256::ZERO,
             data: add_delegate,
         })?;
@@ -107,7 +107,7 @@ impl Argus {
             .clone();
         simulator.exec_transaction(SimulateTxMsg {
             from: self.safe_instance.address().clone(),
-            to: self.authorizer_instance.address().clone(),
+            to: Some(self.authorizer_instance.address().clone()).into(),
             value: U256::ZERO,
             data: add_authorizer,
         })?;
@@ -170,15 +170,18 @@ async fn test_rs_eth_once() {
     structured_logger::Builder::with_level("info").init();
 
     // 填写基本信息
-    let rpc = "";
-    let bot = Address::from_hex("").unwrap();
-    let argus_addr = Address::from_hex("").unwrap();
+    let rpc = "https://eth-mainnet.g.alchemy.com/v2/jP0h5UEZoR7Wpww9tnNKPGihmNwEkECH";
+    let bot = Address::from_hex("0x1108691fAd7cE639fd465e870936f13161741530").unwrap();
+    let argus_addr = Address::from_hex("0x80b1ADF81A6a7B7a8E1f587Abf29DD0445b5Eb5E").unwrap();
     let rs_eth = Address::from_hex("0xA1290d69c65A6Fe4DF752f95823fae25cB99e5A7").unwrap();
     let wst_eth = Address::from_hex("0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0").unwrap();
     let st_eth = Address::from_hex("0xae7ab96520de3a18e5e111b5eaab095312d7fe84").unwrap();
     let pool_addr = Address::from_hex("0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2").unwrap();
     let rs_deposit = Address::from_hex("0x036676389e48133B63a802f8635AD39E752D375D").unwrap();
-    let bs = read_bytecode_from_json("").await;
+    let bs = read_bytecode_from_json(
+        "/Users/lee/repos/sol/cobosafe/out/AaveRsETHACL.sol/AaveRsETHACL.json",
+    )
+    .await;
 
     // 初始化rpc和argus
     let cli = Arc::new(ProviderBuilder::new().on_builtin(rpc).await.unwrap());
@@ -199,7 +202,7 @@ async fn test_rs_eth_once() {
     // approve rseth to pool
     simulator.exec_transaction(SimulateTxMsg {
         from: safe_addr,
-        to: rs_eth.clone(),
+        to: Some(rs_eth.clone()).into(),
         value: U256::ZERO,
         data: abi::erc20::IERC20::approveCall {
             spender: pool_addr,
@@ -212,7 +215,7 @@ async fn test_rs_eth_once() {
     // approve steth to deposit
     simulator.exec_transaction(SimulateTxMsg {
         from: safe_addr,
-        to: st_eth.clone(),
+        to: Some(st_eth.clone()).into(),
         value: U256::ZERO,
         data: abi::erc20::IERC20::approveCall {
             spender: rs_deposit,
@@ -225,7 +228,7 @@ async fn test_rs_eth_once() {
     // set e mode
     simulator.exec_transaction(SimulateTxMsg {
         from: safe_addr,
-        to: pool_addr.clone(),
+        to: Some(pool_addr.clone()).into(),
         value: U256::ZERO,
         data: abi::aave::Pool::setUserEModeCall { categoryId: 3 }
             .abi_encode()

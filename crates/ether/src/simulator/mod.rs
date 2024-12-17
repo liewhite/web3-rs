@@ -11,12 +11,15 @@ use alloy::{hex::FromHex as _, network::TransactionBuilder};
 use eyre::{eyre, Context, OptionExt, Result};
 use foundry_common::provider::ProviderBuilder;
 use foundry_evm::backend::{BlockchainDb, BlockchainDbMeta, SharedBackend};
+use foundry_evm::traces::TracingInspectorConfig;
 use log::{debug, info};
+use revm::db::AlloyDB;
 use revm::inspectors::CustomPrintTracer;
 use revm::primitives::bitvec::ptr::replace;
 use revm::primitives::{BlockEnv, ExecutionResult, TransactTo, TxEnv, TxKind};
-use revm::Inspector;
 use revm::{db::CacheDB, primitives::CancunSpec, Evm, Handler};
+use revm::{Database, Inspector};
+use revm_inspectors::tracing::TracingInspector;
 use std::str::FromStr;
 
 use crate::abi::argus::Argus::rescueCall;
@@ -24,7 +27,7 @@ use crate::abi::argus::Argus::rescueCall;
 #[derive(Debug, Clone)]
 pub struct SimulateTxMsg {
     pub from: Address,
-    pub to: Address,
+    pub to: TxKind,
     pub value: U256,
     pub data: Bytes,
 }
@@ -33,7 +36,7 @@ impl From<TransactionRequest> for SimulateTxMsg {
     fn from(x: TransactionRequest) -> Self {
         SimulateTxMsg {
             from: x.from.unwrap(),
-            to: x.to.unwrap().to().unwrap().clone(),
+            to: x.to.unwrap(),
             value: x.value.unwrap_or(U256::from(0_u32)),
             data: x.input.input().unwrap().clone(),
         }
@@ -45,7 +48,7 @@ impl From<Bytes> for SimulateTxMsg {
         let decoded = TxEnvelope::decode_2718(&mut x.as_ref()).unwrap();
         SimulateTxMsg {
             from: decoded.recover_signer().unwrap(),
-            to: decoded.kind().to().unwrap().clone(),
+            to: decoded.kind(),
             value: decoded.value(),
             data: decoded.input().clone(),
         }
@@ -55,7 +58,7 @@ impl From<TxEnvelope> for SimulateTxMsg {
     fn from(decoded: TxEnvelope) -> Self {
         SimulateTxMsg {
             from: decoded.recover_signer().unwrap(),
-            to: decoded.kind().to().unwrap().clone(),
+            to: decoded.kind(),
             value: decoded.value(),
             data: decoded.input().clone(),
         }
@@ -66,14 +69,15 @@ impl From<types::Transaction> for SimulateTxMsg {
     fn from(tx: types::Transaction) -> Self {
         SimulateTxMsg {
             from: tx.from,
-            to: tx.to.unwrap(),
+            // to 为空则是部署合约
+            to: tx.to.map(|t| TxKind::Call(t)).unwrap_or(TxKind::Create),
             value: tx.value,
             data: tx.input,
         }
     }
 }
 
-#[derive(Debug,Default)]
+#[derive(Debug, Default)]
 pub struct SimulatorBuilder {
     _rpc: String,
     _height: Option<u64>,
@@ -87,8 +91,10 @@ impl SimulatorBuilder {
             block_env.timestamp = U256::from(self._timestamp.unwrap());
         }
         let simulator_backend = shared_backend(&self._rpc);
-        if self._height.is_some(){
-            simulator_backend.set_pinned_block(self._height.unwrap()).unwrap();
+        if self._height.is_some() {
+            simulator_backend
+                .set_pinned_block(self._height.unwrap())
+                .unwrap();
         }
         let mut sim = Simulator::new(simulator_backend, block_env);
         sim.evm.cfg_mut().disable_eip3607 = true;
@@ -116,37 +122,46 @@ pub struct Simulator {
 
 impl Simulator {
     pub fn builder() -> SimulatorBuilder {
-        return SimulatorBuilder::default()
+        return SimulatorBuilder::default();
     }
     pub fn new(backend: SharedBackend, block_env: BlockEnv) -> Simulator {
         let db = CacheDB::new(backend.clone());
         let mut evm = revm::Evm::builder()
             .with_db(db)
             .with_handler(Handler::mainnet::<CancunSpec>())
-            // .with_external_context(CustomPrintTracer::default())
             .build();
         evm.context.evm.env.block = block_env;
         Simulator { evm: evm }
     }
+
+    pub fn trace<T>(&self, tx: T)
+    where
+        SimulateTxMsg: From<T>,
+        T: Clone,
+    {
+        let db = self.evm.db().clone();
+        let tracer = TracingInspector::new(TracingInspectorConfig::all());
+        let mut evm = revm::Evm::builder()
+            .with_db(db)
+            .with_handler(Handler::mainnet::<CancunSpec>())
+            .with_external_context(tracer)
+            .build();
+        // let a = db;
+        evm.context.evm.env.block = self.evm.block().clone();
+        Self::exec_transaction_on_evm(&mut evm, tx.into());
+        // evm.context.external
+
+        // Simulator { evm: evm }
+    }
+
     pub fn deploy_contract(&mut self, from: Address, bytecode: Bytes) -> Result<Address> {
-        let start = SystemTime::now();
-        let env = self.evm.context.evm.env.as_mut();
-        env.tx = TxEnv::default();
-        env.tx.caller = from;
-        env.tx.data = bytecode;
-        env.tx.transact_to = TransactTo::Create;
-        let result = self.evm.transact_commit();
-        let success = if result.is_ok() && result.as_ref().unwrap().is_success() {
-            "✅"
-        } else {
-            "❌"
+        let msg = SimulateTxMsg {
+            from,
+            to: TxKind::Create,
+            value: U256::ZERO,
+            data: bytecode,
         };
-        let elapsed = start.elapsed().unwrap();
-        info!(
-            "{} depoly contract elapsed {:?} result: {:?}",
-            success, elapsed, result
-        );
-        let result = result.wrap_err("deploy error")?;
+        let result = Self::exec_transaction_on_evm(&mut self.evm, msg)?;
         let addr: Result<Address> = match result {
             ExecutionResult::Success {
                 reason,
@@ -168,23 +183,20 @@ impl Simulator {
         addr
     }
 
-    pub fn exec_transaction<T>(&mut self, tx: T) -> Result<ExecutionResult>
-    where
-        SimulateTxMsg: From<T>,
-        T: Clone,
-    {
+    fn exec_transaction_on_evm<'a, T>(
+        _evm: &mut Evm<'a, T, CacheDB<SharedBackend>>,
+        tx: SimulateTxMsg,
+    ) -> Result<ExecutionResult> {
         let start = SystemTime::now();
-        let ele: SimulateTxMsg = tx.into();
-        let to = TxKind::Call(ele.to);
-        let data: Bytes = ele.data.clone();
-
-        let env = self.evm.context.evm.env.as_mut();
+        let data: Bytes = tx.data.clone();
+        let to = tx.to;
+        let env = _evm.context.evm.env.as_mut();
         env.tx = TxEnv::default();
-        env.tx.caller = ele.from;
+        env.tx.caller = tx.from;
         env.tx.data = data.clone();
-        env.tx.value = ele.value;
+        env.tx.value = tx.value;
         env.tx.transact_to = to.clone();
-        let result = self.evm.transact_commit();
+        let result = _evm.transact_commit();
         let success = if result.is_ok() && result.as_ref().unwrap().is_success() {
             "✅"
         } else {
@@ -193,9 +205,17 @@ impl Simulator {
         let elapsed = start.elapsed().unwrap();
         info!(
             "{} simulation elapsed {:?} request: {:?} result: {:?}",
-            success, elapsed, ele, result
+            success, elapsed, tx, result
         );
         result.wrap_err("simulating error")
+    }
+    pub fn exec_transaction<T>(&mut self, tx: T) -> Result<ExecutionResult>
+    where
+        SimulateTxMsg: From<T>,
+        T: Clone,
+    {
+        let ele: SimulateTxMsg = tx.into();
+        return Self::exec_transaction_on_evm(&mut self.evm, ele);
     }
 }
 
