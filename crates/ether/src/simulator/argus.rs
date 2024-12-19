@@ -145,7 +145,8 @@ async fn test_argus_info() {
     let cli = Arc::new(ProviderBuilder::new().on_builtin(rpc).await.unwrap());
     let argus = Argus::new(cli, argus_addr).await.unwrap();
 
-    let mut simulator = Simulator::builder().rpc(rpc).build();
+    let cli = ProviderBuilder::new().on_builtin(rpc).await.unwrap();
+    let mut simulator = Simulator::builder(cli).build();
 
     // 部署acl并添加bot权限
     let acl_addr = simulator.deploy_contract(bot.clone(), bs).unwrap();
@@ -189,8 +190,8 @@ async fn test_rs_eth_once() {
     println!("safe: {}", argus.safe_instance.address());
     let safe_addr = argus.safe_instance.address().clone();
 
-    let mut simulator = Simulator::builder()
-        .rpc(rpc)
+    let cli = ProviderBuilder::new().on_builtin(rpc).await.unwrap();
+    let mut simulator = Simulator::builder(cli)
         .height(21393635)
         ._timestamp(1734266881)
         .build();

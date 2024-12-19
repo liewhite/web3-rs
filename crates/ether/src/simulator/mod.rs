@@ -1,12 +1,16 @@
 pub mod argus;
+use std::marker::PhantomData;
 use std::time::SystemTime;
 use std::{collections::BTreeSet, sync::Arc};
 
 use alloy::consensus::{Transaction, TxEnvelope};
 use alloy::eips::eip2718::Decodable2718;
 use alloy::eips::BlockId;
+use alloy::network::{Ethereum, Network};
 use alloy::primitives::{Address, Bytes, U256};
+use alloy::providers::{Provider, RootProvider};
 use alloy::rpc::types::{self, Block, TransactionRequest};
+use alloy::transports::{BoxTransport, Transport};
 use alloy::{hex::FromHex as _, network::TransactionBuilder};
 use eyre::{eyre, Context, OptionExt, Result};
 use foundry_common::provider::ProviderBuilder;
@@ -77,33 +81,35 @@ impl From<types::Transaction> for SimulateTxMsg {
     }
 }
 
-#[derive(Debug, Default)]
+// #[derive(Debug, Default)]
 pub struct SimulatorBuilder {
-    _rpc: String,
+    cli: RootProvider<BoxTransport>,
     _height: Option<u64>,
     _timestamp: Option<u64>,
 }
 
 impl SimulatorBuilder {
+    pub fn new(cli: RootProvider<BoxTransport>) -> SimulatorBuilder {
+        return SimulatorBuilder {
+            cli: cli,
+            _height: None,
+            _timestamp: None,
+        };
+    }
     pub fn build(self) -> Simulator {
         let mut block_env = BlockEnv::default();
         if self._timestamp.is_some() {
             block_env.timestamp = U256::from(self._timestamp.unwrap());
         }
-        let simulator_backend = shared_backend(&self._rpc);
+        let mut backend = alloy_db(self.cli);
         if self._height.is_some() {
-            simulator_backend
-                .set_pinned_block(self._height.unwrap())
-                .unwrap();
+            backend.set_block_number(self._height.unwrap().into());
         }
-        let mut sim = Simulator::new(simulator_backend, block_env);
+        let mut sim = Simulator::new(backend, block_env);
         sim.evm.cfg_mut().disable_eip3607 = true;
         return sim;
     }
-    pub fn rpc(mut self, url: &str) -> Self {
-        self._rpc = url.to_string();
-        return self;
-    }
+
     pub fn height(mut self, height: u64) -> Self {
         self._height = Some(height);
         return self;
@@ -116,16 +122,19 @@ impl SimulatorBuilder {
 
 #[derive(Debug)]
 pub struct Simulator {
-    // pub backend: SharedBackend,
-    pub evm: Evm<'static, (), CacheDB<SharedBackend>>,
+    pub evm: Evm<'static, (), CacheDB<AlloyDB<BoxTransport, Ethereum, RootProvider<BoxTransport>>>>,
 }
 
 impl Simulator {
-    pub fn builder() -> SimulatorBuilder {
-        return SimulatorBuilder::default();
+    pub fn builder(cli: RootProvider<BoxTransport>) -> SimulatorBuilder {
+        return SimulatorBuilder::new(cli);
     }
-    pub fn new(backend: SharedBackend, block_env: BlockEnv) -> Simulator {
-        let db = CacheDB::new(backend.clone());
+
+    pub fn new(
+        backend: AlloyDB<BoxTransport, Ethereum, RootProvider<BoxTransport>>,
+        block_env: BlockEnv,
+    ) -> Simulator {
+        let db = CacheDB::new(backend);
         let mut evm = revm::Evm::builder()
             .with_db(db)
             .with_handler(Handler::mainnet::<CancunSpec>())
@@ -134,25 +143,25 @@ impl Simulator {
         Simulator { evm: evm }
     }
 
-    pub fn trace<T>(&self, tx: T)
-    where
-        SimulateTxMsg: From<T>,
-        T: Clone,
-    {
-        let db = self.evm.db().clone();
-        let tracer = TracingInspector::new(TracingInspectorConfig::all());
-        let mut evm = revm::Evm::builder()
-            .with_db(db)
-            .with_handler(Handler::mainnet::<CancunSpec>())
-            .with_external_context(tracer)
-            .build();
-        // let a = db;
-        evm.context.evm.env.block = self.evm.block().clone();
-        Self::exec_transaction_on_evm(&mut evm, tx.into());
-        // evm.context.external
+    // pub fn trace<T>(&self, tx: T)
+    // where
+    //     SimulateTxMsg: From<T>,
+    //     T: Clone,
+    // {
+    //     let db = self.evm.db().clone();
+    //     let tracer = TracingInspector::new(TracingInspectorConfig::all());
+    //     let mut evm = revm::Evm::builder()
+    //         .with_db(db)
+    //         .with_handler(Handler::mainnet::<CancunSpec>())
+    //         .with_external_context(tracer)
+    //         .build();
+    //     // let a = db;
+    //     evm.context.evm.env.block = self.evm.block().clone();
+    //     Self::exec_transaction_on_evm(&mut evm, tx.into());
+    //     // evm.context.external
 
-        // Simulator { evm: evm }
-    }
+    //     // Simulator { evm: evm }
+    // }
 
     pub fn deploy_contract(&mut self, from: Address, bytecode: Bytes) -> Result<Address> {
         let msg = SimulateTxMsg {
@@ -161,7 +170,7 @@ impl Simulator {
             value: U256::ZERO,
             data: bytecode,
         };
-        let result = Self::exec_transaction_on_evm(&mut self.evm, msg)?;
+        let result = exec_transaction_on_evm(&mut self.evm, msg)?;
         let addr: Result<Address> = match result {
             ExecutionResult::Success {
                 reason,
@@ -183,55 +192,44 @@ impl Simulator {
         addr
     }
 
-    fn exec_transaction_on_evm<'a, T>(
-        _evm: &mut Evm<'a, T, CacheDB<SharedBackend>>,
-        tx: SimulateTxMsg,
-    ) -> Result<ExecutionResult> {
-        let start = SystemTime::now();
-        let data: Bytes = tx.data.clone();
-        let to = tx.to;
-        let env = _evm.context.evm.env.as_mut();
-        env.tx = TxEnv::default();
-        env.tx.caller = tx.from;
-        env.tx.data = data.clone();
-        env.tx.value = tx.value;
-        env.tx.transact_to = to.clone();
-        let result = _evm.transact_commit();
-        let success = if result.is_ok() && result.as_ref().unwrap().is_success() {
-            "✅"
-        } else {
-            "❌"
-        };
-        let elapsed = start.elapsed().unwrap();
-        info!(
-            "{} simulation elapsed {:?} request: {:?} result: {:?}",
-            success, elapsed, tx, result
-        );
-        result.wrap_err("simulating error")
-    }
     pub fn exec_transaction<T>(&mut self, tx: T) -> Result<ExecutionResult>
     where
         SimulateTxMsg: From<T>,
         T: Clone,
     {
         let ele: SimulateTxMsg = tx.into();
-        return Self::exec_transaction_on_evm(&mut self.evm, ele);
+        return exec_transaction_on_evm(&mut self.evm, ele);
     }
 }
 
-pub fn shared_backend(url: &str) -> SharedBackend {
-    let provider = Arc::new(ProviderBuilder::new(url).build().expect("backend build"));
-    let shared_backend = SharedBackend::spawn_backend_thread(
-        provider.clone(),
-        BlockchainDb::new(
-            BlockchainDbMeta {
-                cfg_env: Default::default(),
-                block_env: Default::default(),
-                hosts: BTreeSet::from(["".to_string()]),
-            },
-            None,
-        ),
-        None,
+fn exec_transaction_on_evm<'a, T, B: revm::DatabaseCommit + revm::Database + std::fmt::Debug>(
+    _evm: &mut Evm<'a, T, B>,
+    tx: SimulateTxMsg,
+) -> Result<ExecutionResult> {
+    let start = SystemTime::now();
+    let data: Bytes = tx.data.clone();
+    let to = tx.to;
+    let env = _evm.context.evm.env.as_mut();
+    env.tx = TxEnv::default();
+    env.tx.caller = tx.from;
+    env.tx.data = data.clone();
+    env.tx.value = tx.value;
+    env.tx.transact_to = to.clone();
+    let result = _evm.transact_commit().map_err(|e| eyre!("db err"));
+    let success = match result.as_ref() {
+        Ok(o) => o.is_success(),
+        Err(e) => false,
+    };
+    let success = if success { "✅" } else { "❌" };
+    let elapsed = start.elapsed().unwrap();
+    info!(
+        "{} simulation elapsed {:?} request: {:?} result: {:?}",
+        success, elapsed, tx, result
     );
-    shared_backend
+    result.wrap_err("simulating err")
+}
+
+pub fn alloy_db<T: Transport + Clone, N: Network, P: Provider<T, N>>(cli: P) -> AlloyDB<T, N, P> {
+    let _adb: AlloyDB<T, N, P> = AlloyDB::new(cli, BlockId::latest()).unwrap();
+    _adb
 }
