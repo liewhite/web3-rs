@@ -146,7 +146,7 @@ async fn test_argus_info() {
     let argus = Argus::new(cli, argus_addr).await.unwrap();
 
     let cli = ProviderBuilder::new().on_builtin(rpc).await.unwrap();
-    let mut simulator = Simulator::builder(cli).build();
+    let mut simulator = Simulator::new(rpc, None, None, false).await;
 
     // 部署acl并添加bot权限
     let acl_addr = simulator.deploy_contract(bot.clone(), bs).unwrap();
@@ -172,17 +172,14 @@ async fn test_rs_eth_once() {
 
     // 填写基本信息
     let rpc = "";
-    let bot = Address::from_hex("").unwrap();
-    let argus_addr = Address::from_hex("").unwrap();
+    let bot = Address::from_hex("0x1108691fAd7cE639fd465e870936f13161741530").unwrap();
+    let argus_addr = Address::from_hex("0x80b1ADF81A6a7B7a8E1f587Abf29DD0445b5Eb5E").unwrap();
     let rs_eth = Address::from_hex("0xA1290d69c65A6Fe4DF752f95823fae25cB99e5A7").unwrap();
     let wst_eth = Address::from_hex("0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0").unwrap();
     let st_eth = Address::from_hex("0xae7ab96520de3a18e5e111b5eaab095312d7fe84").unwrap();
     let pool_addr = Address::from_hex("0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2").unwrap();
     let rs_deposit = Address::from_hex("0x036676389e48133B63a802f8635AD39E752D375D").unwrap();
-    let bs = read_bytecode_from_json(
-        "",
-    )
-    .await;
+    let bs = read_bytecode_from_json("/Users/lee/repos/sol/cobosafe/out/AaveRsETHACL.sol/AaveRsETHACL.json").await;
 
     // 初始化rpc和argus
     let cli = Arc::new(ProviderBuilder::new().on_builtin(rpc).await.unwrap());
@@ -190,11 +187,7 @@ async fn test_rs_eth_once() {
     println!("safe: {}", argus.safe_instance.address());
     let safe_addr = argus.safe_instance.address().clone();
 
-    let cli = ProviderBuilder::new().on_builtin(rpc).await.unwrap();
-    let mut simulator = Simulator::builder(cli)
-        .height(21393635)
-        ._timestamp(1734266881)
-        .build();
+    let mut simulator = Simulator::new(rpc, Some(21393635), Some(1734266881), false).await;
 
     // 部署acl并添加bot权限
     let acl_addr = simulator.deploy_contract(bot.clone(), bs).unwrap();
