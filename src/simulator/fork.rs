@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use alloy::{
-    consensus::BlockHeader,
-    eips::BlockId,
+    consensus::{transaction::SignerRecoverable, BlockHeader, Transaction, TxEnvelope},
+    eips::{BlockId, Decodable2718},
     network::{AnyNetwork, AnyRpcBlock},
-    primitives::{keccak256, Address, Bytes, U256},
+    primitives::{keccak256, Address, Bytes, TxKind, U256},
     providers::{Provider, ProviderBuilder},
 };
 use alloy_evm::{eth::EthEvmBuilder, Evm, EvmEnv};
@@ -135,6 +135,38 @@ impl ForkSimulator {
         let result = into_simulation_result(res);
         self.commit_state(&result.state_changes);
         Ok(result)
+    }
+
+    /// 从**已签名的** 2718 raw tx 解出 sender 和字段，执行 [`simulate_and_commit`]。
+    ///
+    /// 典型用途：Phase 2 / Phase 3 测试里，delegate 用 `LocalSigner` 或
+    /// `RemoteSigner`（连本地 cs-signer）签出 raw tx 后，直接在 fork 上重放
+    /// 验证链上执行效果。caller 来自 `envelope.recover_signer()`，和生产
+    /// 链完全一致。
+    ///
+    /// 不支持 contract creation（`TxKind::Create`）—— CoboSafe 场景下也不需要。
+    pub fn simulate_raw_tx(&mut self, raw: &[u8]) -> Result<SimulationResult> {
+        let mut buf = raw;
+        let envelope = TxEnvelope::decode_2718(&mut buf)
+            .map_err(|e| eyre::eyre!("decode 2718 envelope: {e}"))?;
+        let caller = envelope
+            .recover_signer()
+            .map_err(|e| eyre::eyre!("recover signer: {e:?}"))?;
+        let kind = match envelope.to() {
+            Some(addr) => TxKind::Call(addr),
+            None => TxKind::Create,
+        };
+        let tx = TxEnv {
+            caller,
+            nonce: envelope.nonce(),
+            kind,
+            data: envelope.input().clone(),
+            value: envelope.value(),
+            gas_limit: envelope.gas_limit(),
+            gas_price: envelope.max_fee_per_gas(),
+            ..Default::default()
+        };
+        self.simulate_and_commit(tx)
     }
 
     /// 提交状态变更到 fork DB，修复 foundry-fork-db 的零值 slot 问题。
