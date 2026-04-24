@@ -59,7 +59,7 @@
 
 use alloy::{
     json_abi::JsonAbi,
-    primitives::{address, Address, Bytes, TxKind, U256},
+    primitives::{address, Address, Bytes, U256},
     sol,
     sol_types::SolCall,
 };
@@ -82,8 +82,6 @@ const CHAIN_ID: u64 = 1;
 
 sol! {
     function deposit() external payable;
-    function isModuleEnabled(address module) external view returns (bool);
-    function enableModule(address module) external;
 }
 
 /// WETH ABI — 给 `AbiDecoder` 注册用。`display_result` 会按注册的 ABI 把
@@ -128,21 +126,8 @@ async fn main() -> Result<()> {
     let mut sim = ForkSimulator::fork_for_simulation(&rpc_url, None).await?;
     tracing::info!("Forked at block {:?}", sim.block_env().number);
 
-    // ─── 2. 读 CoboSafe 当前 owner 和 Safe 地址 ───
-    let owner = cobosafe::get_owner(&sim, cobosafe_addr)?;
-    let safe = cobosafe::get_safe(&sim, cobosafe_addr)?;
-    tracing::info!("CoboSafe: {cobosafe_addr}");
-    tracing::info!("  owner:  {owner}");
-    tracing::info!("  safe:   {safe}");
-
-    // ─── 3. fund ETH ───
-    let one_eth = U256::from(10u64).pow(U256::from(18u64));
-    let ten_eth = one_eth * U256::from(10u64);
-    sim.set_eth_balance(owner, ten_eth)?;
-    sim.set_eth_balance(TEST_DELEGATE, ten_eth)?;
-    sim.set_eth_balance(safe, ten_eth)?; // Safe 要 ETH 做 WETH.deposit
-
-    // ─── 4. 从 Foundry artifact 读 bytecode + ABI，部署到 MOCK_ACL 地址 ───
+    // ─── 2. 从 Foundry artifact 读 bytecode + ABI，部署到 MOCK_ACL 地址 ───
+    //         setup_fork_test_env 要求 ACL 地址已有 code，所以先 set_code。
     let (acl_bytecode, acl_abi) = load_foundry_artifact(&artifact_path)?;
     tracing::info!(
         "Loaded artifact ({}): {} bytes runtime bytecode",
@@ -152,18 +137,16 @@ async fn main() -> Result<()> {
     sim.set_code(MOCK_ACL, Bytes::from(acl_bytecode))?;
     tracing::info!("Deployed ACL at {MOCK_ACL}");
 
-    // ─── 5. setAuthorizer(mock_acl) ───
-    cobosafe::set_authorizer(&mut sim, owner, cobosafe_addr, MOCK_ACL)?;
-    tracing::info!("setAuthorizer({MOCK_ACL}) OK");
+    // ─── 3. 一键配好 fork 权限链：fund + setAuthorizer + addDelegate + enableModule ───
+    let setup = cobosafe::setup_fork_test_env(&mut sim, cobosafe_addr, MOCK_ACL, TEST_DELEGATE)?;
+    tracing::info!("CoboSafe: {cobosafe_addr}");
+    tracing::info!("  owner:  {}", setup.owner);
+    tracing::info!("  safe:   {}", setup.safe);
+    tracing::info!("setAuthorizer + addDelegate + enableModule OK");
+    let safe = setup.safe;
+    let one_eth = U256::from(10u64).pow(U256::from(18u64));
 
-    // ─── 6. addDelegate(test_delegate) ───
-    cobosafe::add_delegate(&mut sim, owner, cobosafe_addr, TEST_DELEGATE)?;
-    tracing::info!("addDelegate({TEST_DELEGATE}) OK");
-
-    // ─── 7. Safe 是否已启用 CoboSafe 作为 module ───
-    ensure_module_enabled(&mut sim, safe, cobosafe_addr)?;
-
-    // ─── 8. delegate → CoboSafe.execTransactions([Safe → WETH.deposit(1 ETH)]) ───
+    // ─── 4. delegate → CoboSafe.execTransactions([Safe → WETH.deposit(1 ETH)]) ───
     let inner = TxRequest {
         to: WETH,
         value: one_eth,
@@ -212,7 +195,7 @@ async fn main() -> Result<()> {
         result.revert_reason
     );
 
-    // ─── 9. 断言 Safe 的 WETH 余额 +1 ETH ───
+    // ─── 5. 断言 Safe 的 WETH 余额 +1 ETH ───
     let bal_after = fork_erc20_balance(&sim, WETH, safe)?;
     let delta = bal_after - bal_before;
     tracing::info!("Safe WETH after:  {bal_after} (delta +{delta})");
@@ -222,45 +205,6 @@ async fn main() -> Result<()> {
     );
 
     tracing::info!("✓ cobosafe fork e2e 全部步骤通过");
-    Ok(())
-}
-
-/// 检查 `safe.isModuleEnabled(cobosafe)`；未启用则以 Safe 自身为 caller
-/// 调用 `Safe.enableModule(cobosafe)`（Gnosis Safe 规定 enableModule 只能 self-call）。
-fn ensure_module_enabled(
-    sim: &mut ForkSimulator,
-    safe: Address,
-    cobosafe_addr: Address,
-) -> Result<()> {
-    let check = TxEnv {
-        caller: Address::ZERO,
-        kind: TxKind::Call(safe),
-        data: Bytes::from(isModuleEnabledCall { module: cobosafe_addr }.abi_encode()),
-        gas_limit: 100_000,
-        ..Default::default()
-    };
-    let r = sim.simulate(check)?;
-    let out = r
-        .output
-        .ok_or_else(|| eyre::eyre!("isModuleEnabled returned no output"))?;
-    let enabled = isModuleEnabledCall::abi_decode_returns(&out)?;
-
-    if enabled {
-        tracing::info!("CoboSafe already enabled as Safe module, skip enableModule");
-        return Ok(());
-    }
-
-    let enable = TxEnv {
-        caller: safe,
-        nonce: sim.get_nonce(safe)?,
-        kind: TxKind::Call(safe),
-        data: Bytes::from(enableModuleCall { module: cobosafe_addr }.abi_encode()),
-        gas_limit: 200_000,
-        ..Default::default()
-    };
-    let r = sim.simulate_and_commit(enable)?;
-    eyre::ensure!(r.success, "enableModule failed: {:?}", r.revert_reason);
-    tracing::info!("enableModule({cobosafe_addr}) OK");
     Ok(())
 }
 

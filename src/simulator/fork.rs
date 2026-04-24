@@ -266,6 +266,25 @@ impl ForkSimulator {
         Ok(info.map(|a| a.balance).unwrap_or_default())
     }
 
+    /// 读取任意 storage slot 的当前值。
+    pub fn get_storage(&self, addr: Address, slot: U256) -> Result<U256> {
+        self.shared
+            .storage_ref(addr, slot)
+            .map_err(|e| eyre::eyre!("{e:?}"))
+    }
+
+    /// 覆盖任意 storage slot 的值并 commit 到 fork DB。
+    ///
+    /// 常用场景：mock oracle 价格、AMM pool 储备、合约内部 flag 等 —— 任何
+    /// 通过标准 setter 难以达到的状态都可以直接改 slot。
+    ///
+    /// 本方法内部自动读原值作为 `original` 传给 commit 逻辑（revm slot
+    /// transition 需要），调用方不必关心。
+    pub fn set_storage(&mut self, addr: Address, slot: U256, value: U256) -> Result<()> {
+        let original = self.get_storage(addr, slot)?;
+        self.commit_storage(addr, slot, original, value)
+    }
+
     /// 写入 storage 并 commit 到 fork DB
     fn commit_storage(
         &self,

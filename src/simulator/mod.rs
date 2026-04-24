@@ -1,3 +1,4 @@
+pub mod assertions;
 pub mod decoder;
 pub mod display;
 pub mod erc20;
