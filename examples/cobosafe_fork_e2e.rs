@@ -63,12 +63,14 @@ use alloy::{
     sol,
     sol_types::SolCall,
 };
-use eyre::{Result, WrapErr};
+use eyre::Result;
 use revm::context::TxEnv;
 
 use flashseal_rs::{
-    app, display_result, simulator::erc20::balance as fork_erc20_balance,
-    utils::cobosafe, AbiDecoder, CoboSafeBuilder, ForkSimulator, TxBuilder, TxRequest,
+    app, display_result,
+    simulator::erc20::balance as fork_erc20_balance,
+    utils::{cobosafe, foundry},
+    AbiDecoder, CoboSafeBuilder, ForkSimulator, TxBuilder, TxRequest,
 };
 
 // 主网地址
@@ -128,14 +130,15 @@ async fn main() -> Result<()> {
 
     // ─── 2. 从 Foundry artifact 读 bytecode + ABI，部署到 MOCK_ACL 地址 ───
     //         setup_fork_test_env 要求 ACL 地址已有 code，所以先 set_code。
-    let (acl_bytecode, acl_abi) = load_foundry_artifact(&artifact_path)?;
+    let artifact = foundry::load_artifact(&artifact_path)?;
     tracing::info!(
         "Loaded artifact ({}): {} bytes runtime bytecode",
         artifact_path,
-        acl_bytecode.len()
+        artifact.deployed_bytecode.len()
     );
-    sim.set_code(MOCK_ACL, Bytes::from(acl_bytecode))?;
+    sim.set_code(MOCK_ACL, Bytes::from(artifact.deployed_bytecode))?;
     tracing::info!("Deployed ACL at {MOCK_ACL}");
+    let acl_abi = artifact.abi;
 
     // ─── 3. 一键配好 fork 权限链：fund + setAuthorizer + addDelegate + enableModule ───
     let setup = cobosafe::setup_fork_test_env(&mut sim, cobosafe_addr, MOCK_ACL, TEST_DELEGATE)?;
@@ -206,33 +209,4 @@ async fn main() -> Result<()> {
 
     tracing::info!("✓ cobosafe fork e2e 全部步骤通过");
     Ok(())
-}
-
-/// 从 Foundry 编译产物 `out/<file>.sol/<contract>.json` 读 runtime bytecode 和 ABI。
-///
-/// - `deployedBytecode.object` = 合约部署后的 runtime 字节码，正是 `set_code` 要写入的内容。
-///   （`bytecode.object` 则是 constructor bytecode，用于 create tx；set_code 不适合它。）
-/// - `abi` = 合约的 JSON ABI，注册进 `AbiDecoder` 能解码后续 tx/events。
-fn load_foundry_artifact(path: &str) -> Result<(Vec<u8>, JsonAbi)> {
-    let content = std::fs::read_to_string(path)
-        .wrap_err_with(|| format!("failed to read foundry artifact: {path}"))?;
-    let v: serde_json::Value =
-        serde_json::from_str(&content).wrap_err("foundry artifact is not valid JSON")?;
-
-    let hex_str = v
-        .get("deployedBytecode")
-        .and_then(|o| o.get("object"))
-        .and_then(|s| s.as_str())
-        .ok_or_else(|| eyre::eyre!("no `deployedBytecode.object` in artifact: {path}"))?;
-    let hex = hex_str.strip_prefix("0x").unwrap_or(hex_str);
-    let bytecode = alloy::hex::decode(hex).wrap_err("deployedBytecode.object hex decode")?;
-    eyre::ensure!(!bytecode.is_empty(), "deployedBytecode.object is empty in {path}");
-
-    let abi_value = v
-        .get("abi")
-        .ok_or_else(|| eyre::eyre!("no `abi` in artifact: {path}"))?;
-    let abi: JsonAbi = serde_json::from_value(abi_value.clone())
-        .wrap_err("parse `abi` field as JsonAbi")?;
-
-    Ok((bytecode, abi))
 }

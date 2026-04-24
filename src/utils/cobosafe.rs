@@ -20,6 +20,7 @@ use alloy::{
 };
 use eyre::Result;
 use revm::context::TxEnv;
+use sha2::{Digest, Sha256};
 
 use crate::{CoboSafeBuilder, ForkSimulator, TxBuilder, TxRequest, TxSender, TxSigner};
 
@@ -186,6 +187,28 @@ fn exec_admin_call(
     Ok(())
 }
 
+// ── Role bytes32 编码 ──
+
+/// 把 role 名字（人类可读字符串）转成 `bytes32`，与 **cs-argus-agent** Go 侧
+/// (`pkg/argus/client.go::RoleBytes32`) 的算法保持一致：
+///
+/// - 名字 ≤ 32 字节：UTF-8 bytes 右补零填满 32 字节（保持可读）
+/// - 名字 > 32 字节：SHA256 前 32 字节（和原始字符串不可逆但可校验）
+///
+/// 两端（Rust skill、Go deploy 工具）用同一个算法算 bytes32，否则 ACL 配置
+/// 和 delegate 的 role 对不上。
+pub fn role_name_to_bytes32(name: &str) -> B256 {
+    let bytes = name.as_bytes();
+    if bytes.len() <= 32 {
+        let mut out = [0u8; 32];
+        out[..bytes.len()].copy_from_slice(bytes);
+        B256::from(out)
+    } else {
+        let digest = Sha256::digest(bytes);
+        B256::from_slice(&digest)
+    }
+}
+
 // ── FlatRoleManager（Cobo Argus）──
 
 /// FlatRoleManager.addRoles(roles) —— 创建若干新角色（空委托，后续用
@@ -295,4 +318,39 @@ pub fn setup_fork_test_env(
     enable_module(sim, safe, cobosafe)?;
 
     Ok(ForkSetup { owner, safe })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_short_name_right_padded() {
+        let b = role_name_to_bytes32("swap_bot");
+        // "swap_bot" = 0x73 77 61 70 5f 62 6f 74，右侧补零填满 32 字节
+        assert_eq!(
+            b,
+            B256::from_slice(&[
+                0x73, 0x77, 0x61, 0x70, 0x5f, 0x62, 0x6f, 0x74, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ])
+        );
+    }
+
+    #[test]
+    fn role_exact_32_bytes_fills_all() {
+        let name = "01234567890123456789012345678901"; // 32 字节
+        let b = role_name_to_bytes32(name);
+        assert_eq!(&b[..], name.as_bytes());
+    }
+
+    #[test]
+    fn role_over_32_uses_sha256() {
+        let name = "a".repeat(33);
+        let b = role_name_to_bytes32(&name);
+        // 长度应为 32 且非零（sha256 输出）
+        assert_eq!(b.len(), 32);
+        let hashed = Sha256::digest(name.as_bytes());
+        assert_eq!(&b[..], &hashed[..]);
+    }
 }
