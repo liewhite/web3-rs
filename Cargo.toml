@@ -1,0 +1,23 @@
+[package]
+name = "flashseal-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+revm = { version = "34", default-features = false, features = ["std", "optional_eip3607", "optional_balance_check"] }
+alloy-evm = "0.27"
+alloy = { version = "1.1", features = ["full"] }
+foundry-fork-db = "0.22"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+eyre = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json"] }
+ed25519-dalek = "2"
+sha2 = "0.10"
+futures = "0.3"
+openssl = { version = "0.10", features = ["vendored"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
