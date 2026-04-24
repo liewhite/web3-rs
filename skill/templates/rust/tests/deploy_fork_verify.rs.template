@@ -1,0 +1,71 @@
+// Phase 4 产出: production/tests/deploy_fork_verify.rs
+//
+// 重放 safe-txs/deploy.json 在 fork 上，caller=safe 一笔笔执行，断言后置条件：
+// - CoboSafe.authorizer == ACL
+// - role 已 grant 给真实 delegate
+// - delegate 已在 CoboSafe.delegates 里
+// - Safe.isModuleEnabled(CoboSafe) == true
+
+use alloy::primitives::{address, Address, Bytes, TxKind, U256};
+use eyre::Result;
+use revm::context::TxEnv;
+use serde_json::Value;
+
+use web3_rs::{utils::cobosafe, utils::foundry, ForkSimulator};
+
+const RPC_URL: &str = env!("RPC_URL");
+const COBOSAFE: Address = address!("<PROD_COBOSAFE>");
+const SAFE: Address = address!("<PROD_SAFE>");
+const DELEGATE: Address = address!("<PROD_DELEGATE>");
+const ACL_ADDR: Address = address!("<PROD_ACL_ADDR>"); // 真实部署地址
+const DEPLOY_JSON: &str = "safe-txs/deploy.json";
+
+#[tokio::test]
+#[ignore = "fork test"]
+async fn deploy_json_satisfies_preconditions() -> Result<()> {
+    let mut sim = ForkSimulator::fork_for_simulation(RPC_URL, None).await?;
+
+    // 如果 deploy 产物还没上链，先 set_code 注入 ACL
+    let artifact = foundry::load_artifact("../contracts/out/<ACL_NAME>.sol/<ACL_NAME>.json")?;
+    sim.set_code(ACL_ADDR, artifact.deployed_bytecode.into())?;
+
+    // 读 deploy.json，重放每笔 sub-tx（caller = Safe）
+    let body: Value = serde_json::from_str(&std::fs::read_to_string(DEPLOY_JSON)?)?;
+    let txs = body["transactions"]
+        .as_array()
+        .expect("transactions array");
+    for (i, t) in txs.iter().enumerate() {
+        let to: Address = t["to"].as_str().unwrap().parse()?;
+        let value: U256 = t["value"].as_str().unwrap().parse()?;
+        let data = Bytes::from(alloy::hex::decode(
+            t["data"].as_str().unwrap().trim_start_matches("0x"),
+        )?);
+
+        let r = sim.simulate_and_commit(TxEnv {
+            caller: SAFE,
+            kind: TxKind::Call(to),
+            data,
+            value,
+            gas_limit: 1_000_000,
+            nonce: sim.get_nonce(SAFE)?,
+            ..Default::default()
+        })?;
+        eyre::ensure!(
+            r.success,
+            "deploy.json tx[{i}] to {to:?} reverted: {:?}",
+            r.revert_reason
+        );
+    }
+
+    // 后置断言
+    // Claude: 确认 CoboSafe.authorizer == ACL_ADDR、delegate 登记、module enabled 等
+    // 可以用 utils::cobosafe::get_safe / is_module_enabled / 自己调 cobosafe 的 getter
+    assert!(
+        cobosafe::is_module_enabled(&sim, SAFE, COBOSAFE)?,
+        "Safe module not enabled after deploy"
+    );
+
+    // authorizer 查询需要 cobosafe.authorizer() getter，skill 按需补
+    let _ = (DELEGATE, COBOSAFE);
+    Ok(())
+}

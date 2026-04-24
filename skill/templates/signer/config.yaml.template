@@ -1,0 +1,16 @@
+# cs-signer 主配置（本地开发 / skill Phase 3 专用）
+# Claude: 端口由 start_local_signer.sh 通过 --port 覆盖，这里保留 listen 字段占位即可。
+
+log:
+  handlerStd: true
+  handlerFile: false
+  level: debug
+
+listen:
+  addr: 127.0.0.1
+  port: 8080
+
+chains:
+  eth:
+    chain_type: ethereum
+    chain_id: 1

@@ -1,0 +1,50 @@
+// rule.js — 签名前拦截。
+//
+// 输入: dataStr = JSON.stringify({type, content})
+//   type = "transaction" | "eip712" | "message"
+//   content.chain_id, content.account
+//   content.transaction = { chainId, type, hash, nonce, from, to, value, gas,
+//                           gasPrice, maxPriorityFeePerGas, maxFeePerGas,
+//                           input, access_list, v, r, s }
+//
+// 返回 true = 放行；false = 拒签（client 收到 ForbiddenError 4045）
+//
+// Claude 指南：
+// 1. 外层 tx.to 必须 == COBOSAFE
+// 2. 解 input 拿 execTransactions(TransactionData[])，对每个 inner call 做等价于
+//    ACL 的检查（按 Phase 0 规格）
+// 3. rule.js 比 ACL 更早拦截，两者对同一 tx 必须判断一致。Phase 3 自动验证。
+
+const COBOSAFE = "0x<COBOSAFE_LOWERCASE>";
+const TARGET = "0x<TARGET_PROTOCOL_LOWERCASE>";
+const SAFE = "0x<SAFE_LOWERCASE>";
+
+function check(dataStr) {
+    const data = JSON.parse(dataStr);
+    if (data.type !== "transaction") {
+        console.log("non-transaction signing not allowed");
+        return false;
+    }
+    const tx = data.content.transaction;
+
+    // 1. 外层必须打 CoboSafe
+    if (tx.to.toLowerCase() !== COBOSAFE.toLowerCase()) {
+        console.log("to != cobosafe");
+        return false;
+    }
+
+    // 2. 解析 execTransactions input
+    //    Claude: 用 ethers.js v6 (已作为 cs-signer runtime 的一部分) 解码
+    //    const iface = new ethers.Interface(["function execTransactions(tuple(uint256 flag, address to, uint256 value, bytes data, bytes hint, bytes extra)[])"]);
+    //    const parsed = iface.parseTransaction({ data: tx.input });
+    //    const txs = parsed.args[0];
+
+    // 3. 对每个 inner call 检查（等价 ACL 里的 require 列表）
+    //    for (const inner of txs) {
+    //        if (inner.to.toLowerCase() !== TARGET.toLowerCase()) return false;
+    //        // 解 inner.data → 取参数 → 检查约束
+    //    }
+
+    console.log("rule pass");
+    return true;
+}

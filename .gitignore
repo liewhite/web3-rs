@@ -3,3 +3,6 @@
 *.json
 *.sol
 *.pem
+
+# skill 目录要保留所有模板文件（`*.sol`、`*.json` 等规则对它豁免）
+!skill/**

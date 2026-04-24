@@ -1,0 +1,103 @@
+# &lt;PROJECT_NAME&gt;
+
+经 CoboSafe / Cobo Argus + cs-signer 发交易的 bot。
+
+## 最终产物
+
+```
+production/
+├── Cargo.toml                     # web3-rs rev pinned
+├── src/
+│   ├── lib.rs                     # build_inner_calls（和 Phase 1-3 测试完全一致）
+│   └── bin/<name>.rs              # 硬编码所有非业务参数；clap CLI 业务变量
+├── safe-txs/
+│   ├── deploy.json                # Safe Transaction Builder JSON（setAuthorizer + grantRoles + ...）
+│   ├── rollback.json              # 反向操作
+│   └── (deploy_fork_verify 测试在 tests/)
+├── signer/
+│   └── rule.js                    # cs-signer 项目下 rule.js（测过的版本）
+└── README.md                      # 本文档
+```
+
+Foundry 项目（ACL 源码 + 编译产物）在 `../contracts/`；skill 的集成测试在 `../rust/tests/`（不进生产）。
+
+## 部署步骤（生产）
+
+### 1. 编译 ACL
+
+```bash
+cd ../contracts
+forge soldeer install   # 第一次
+forge build
+```
+
+产物：`contracts/out/<ACL>.sol/<ACL>.json`
+
+### 2. 部署 ACL 到主网
+
+用任意 EOA（ACL 部署不涉及权限）：
+
+```bash
+forge create --rpc-url <PROD_RPC> \
+    --private-key <DEPLOYER_KEY> \
+    src/<ACL>.sol:<ACL> \
+    --constructor-args <SAFE_ADDRESS> \
+    --broadcast
+```
+
+记下部署后的合约地址 `ACL_DEPLOYED_ADDR`，填进 production/src/bin/main.rs 和 safe-txs/deploy.json 里的占位（skill 生成时已填，只需确认）。
+
+### 3. Safe 多签审批 deploy.json
+
+Safe web UI → **Apps → Transaction Builder → Load → 选 `safe-txs/deploy.json`** → 每个 owner 签批 → execute。
+
+deploy.json 一次性完成：
+- （必要时）enableModule(CoboSafe)
+- setAuthorizer(ACL)
+- addRoles([role])
+- grantRoles([role], [delegate])
+- addDelegate(delegate)
+
+### 4. 上传 rule.js 到生产 cs-signer
+
+```bash
+scp signer/rule.js <operator>@<signer-server>:/path/to/cs-signer/projects/<PROJECT>/rule.js
+```
+
+或按 cs-signer 运维方式推送。
+
+### 5. 启动 bot
+
+```bash
+cd production
+cargo build --release
+./target/release/<name> --amount 1.5          # 默认 gas = basefee × 1.5
+./target/release/<name> --amount 1.5 --gas-price-gwei 20
+./target/release/<name> --amount 1.5 --dry-run   # 只签名不广播，打印 raw tx
+```
+
+## 回滚
+
+```bash
+# Safe UI → Transaction Builder → Load safe-txs/rollback.json → 签批
+```
+
+rollback.json 撤销：revokeRoles + removeDelegate + removeAuthorizer。回滚后 bot 签出的 tx 链上都会被 ACL 拒。
+
+紧急停止（从快到慢）：
+1. **停 bot 进程**（kill / systemctl stop）
+2. **改 signer 侧 rule.js 返 `return false`**（要先让 signer 拒签），reload signer
+3. **Safe 多签 rollback.json**（最终手段，链上也拦住）
+
+## 运维
+
+- 监控：bot stdout（tracing，默认 info）+ etherscan 跟 operator EOA tx 历史
+- 告警：revert 或 RPC 错误时 exit != 0，接 systemd / k8s alert
+- 升级 ACL：改 `contracts/src/`，重跑 skill 的 Phase 2-4，生成新 deploy.json 走 Safe 替换 authorizer
+- 升级 bot：改 `production/src/`，重跑 skill Phase 1-3 gate，build + deploy 新 binary
+
+## 安全
+
+- `ED25519_SEED_HEX` 硬编码在 bin 里 → **本仓库必须 private**
+- operator EOA 私钥**不在本仓库**，只存在于 cs-signer 的 account 配置（生产 signer 侧）
+- Safe 和 CoboSafe 的 owner（多签 owners）**完全独立**于本仓库

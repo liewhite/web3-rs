@@ -1,0 +1,22 @@
+# Claude: 复制到 <project>/contracts/foundry.toml，保持字段不变。
+# solc 版本、via_ir 必须锁死（cobosafe v1.0.3 对应 0.8.26）。
+
+[profile.default]
+src = "src"
+out = "out"
+libs = ["dependencies"]
+test = "test"
+solc = "0.8.26"
+via_ir = true
+optimizer = true
+optimizer_runs = 200
+
+[dependencies]
+cobosafe = { version = "1.0.3", git = "ssh://github.com/CoinSummer/cobosafe.git", tag = "v1.0.3" }
+forge-std = "1.15.0"
+"@openzeppelin-contracts" = "4.8.0"
+
+[soldeer]
+remappings_version = false
+
+# 记得 `forge soldeer install` 第一次拉依赖

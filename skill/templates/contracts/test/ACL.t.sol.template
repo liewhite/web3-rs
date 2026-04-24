@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+// Claude 指南：
+// 每条 require() 至少 1 个 negative test（vm.expectRevert 带 message 字符串），
+// 加 1 个 positive test 走完所有 require 路径。BaseACL 的 preExecCheck 会返回
+// AuthorizerReturnData，直接测同名 check 函数（更直接）也行，两种风格选一致。
+
+import "forge-std/Test.sol";
+import "../src/MyBotACL.sol";
+
+contract MyBotACLTest is Test {
+    MyBotACL internal acl;
+    address internal constant SAFE = address(0xABCD);
+
+    function setUp() public {
+        acl = new MyBotACL(SAFE);
+    }
+
+    // ─── Positive ───
+    function test_withdraw_ok() public view {
+        acl.withdraw(address(0x1111), 1 ether, SAFE);
+    }
+
+    // ─── Negative: recipient must be safe ───
+    function test_withdraw_bad_recipient() public {
+        vm.expectRevert(bytes("recipient must be safe"));
+        acl.withdraw(address(0x1111), 1 ether, address(0xDEAD));
+    }
+
+    // ─── Negative: amount range ───
+    function test_withdraw_amount_zero() public {
+        vm.expectRevert(bytes("amount out of range"));
+        acl.withdraw(address(0x1111), 0, SAFE);
+    }
+
+    function test_withdraw_amount_over_max() public {
+        vm.expectRevert(bytes("amount out of range"));
+        acl.withdraw(address(0x1111), 101 ether, SAFE);
+    }
+
+    // Claude: 为每条 require 都生成对应 negative test
+}

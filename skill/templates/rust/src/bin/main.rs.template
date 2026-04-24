@@ -1,0 +1,109 @@
+// 生产 bin。**除 ed25519 seed 外全部硬编码**（用户明确要求）。
+// 业务参数 + gas_price 通过 clap CLI 传入。
+//
+// Claude: 按 Phase 4 从用户收集的真实值填所有 const。
+
+use alloy::{
+    network::AnyNetwork,
+    primitives::{address, Address},
+    providers::{Provider, ProviderBuilder},
+};
+use clap::Parser;
+use eyre::Result;
+
+use web3_rs::{
+    app,
+    utils::cobosafe,
+    RemoteSigner, RpcSender,
+};
+
+use <PROJECT_NAME>::{build_inner_calls, BotParams};
+
+// ═══════════════════ 硬编码配置 ═══════════════════
+const RPC_URL: &str = "<PROD_RPC_URL>";
+const COBOSAFE: Address = address!("<PROD_COBOSAFE>");
+const SAFE: Address = address!("<PROD_SAFE>");
+const SIGNER_URL: &str = "<PROD_SIGNER_URL>";
+const SIGNER_PROJECT: &str = "<PROD_SIGNER_PROJECT>";
+/// **ed25519 seed 硬编码** —— 用户确认本 bin 仓库 private，风险自担
+const ED25519_SEED_HEX: &str = "<PROD_ED25519_SEED_HEX_64_CHARS>";
+/// 默认 gas 策略：`basefee × multiplier / 100`（150 = 1.5x）
+const GAS_MULTIPLIER_PCT: u128 = 150;
+
+// ═══════════════════ CLI ═══════════════════
+#[derive(Parser, Debug)]
+#[command(about = "<PROJECT_NAME> bot")]
+struct Args {
+    /// Claude: 按 BotParams 字段增减
+    #[arg(long)]
+    amount: String,
+
+    /// 覆盖默认 gas（gwei）。不填则按 basefee × multiplier 算
+    #[arg(long)]
+    gas_price_gwei: Option<u64>,
+
+    /// 只构造 + 签名，不广播。打印 raw tx hex 供人工审查后再手动发
+    #[arg(long)]
+    dry_run: bool,
+}
+
+fn parse_seed() -> Result<[u8; 32]> {
+    let bytes = alloy::hex::decode(ED25519_SEED_HEX)?;
+    bytes
+        .try_into()
+        .map_err(|v: Vec<u8>| eyre::eyre!("seed must be 32 bytes, got {}", v.len()))
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    app::init_tracing();
+    let args = Args::parse();
+
+    let provider = ProviderBuilder::new()
+        .network::<AnyNetwork>()
+        .connect_http(RPC_URL.parse()?)
+        .erased();
+    let chain_id = provider.get_chain_id().await?;
+    tracing::info!("chain_id={chain_id}, cobosafe={COBOSAFE}, safe={SAFE}");
+
+    let seed = parse_seed()?;
+    let signer = RemoteSigner::new(SIGNER_URL.into(), SIGNER_PROJECT.into(), seed, 0).await?;
+    tracing::info!("operator={}", <web3_rs::RemoteSigner as web3_rs::TxSigner>::address(&signer));
+
+    // gas 决策
+    let gas = match args.gas_price_gwei {
+        Some(g) if g > 0 => (g as u128) * 1_000_000_000,
+        _ => {
+            let base = app::estimate_gas_fee(&provider).await?;
+            base * GAS_MULTIPLIER_PCT / 100
+        }
+    };
+    tracing::info!("gas={} gwei", gas / 1_000_000_000);
+
+    // Claude: 按 Args 字段组装 BotParams
+    let params = BotParams {
+        amount: web3_rs::utils::decimal::parse_decimal_units(&args.amount, 18)?,
+    };
+    let requests = build_inner_calls(&params, SAFE);
+
+    if args.dry_run {
+        // Claude: 如果要 dry-run，构造 CoboSafeBuilder::build_txs + signer.sign，
+        // 打印 raw hex 后直接 return Ok(())。不调 submit_transactions。
+        tracing::info!("--dry-run: 只构造和签名，不广播");
+        // TODO: skill 生成时展开该分支
+        return Ok(());
+    }
+
+    let sender = RpcSender::new(RPC_URL)?;
+    cobosafe::submit_transactions(
+        &provider,
+        &signer,
+        COBOSAFE,
+        &sender,
+        &requests,
+        gas,
+        gas,
+    )
+    .await?;
+    Ok(())
+}

@@ -1,0 +1,51 @@
+// Claude 指南：
+// 把 Phase 0 推断出的业务 inner calls 在这里实现。这是**唯一的业务逻辑函数**，
+// Phase 1/2/3 测试 和 Phase 4 生产 bin 都调这同一个函数。bug 改一处两边同步。
+//
+// 原则：
+// - 纯函数，无 IO（不查 RPC、不读文件、不发请求）
+// - 参数 `BotParams` 封装业务可变部分（金额、tokenId、等）；`safe` 单独传
+// - 返回 `Vec<TxRequest>`，每条是 CoboSafe inner call
+// - 不要在这里算 gas / nonce / chain_id —— 那些由 bin 的上层处理
+
+use alloy::{
+    primitives::{Address, Bytes, U256},
+    sol_types::SolCall,
+    sol,
+};
+use web3_rs::TxRequest;
+
+// Claude: 按 target 合约的 ABI 写 sol!
+sol! {
+    function withdraw(address token, uint256 amount, address recipient) external;
+}
+
+/// 业务可变参数。Claude: 根据 Phase 0 规格增减字段。
+#[derive(Debug, Clone)]
+pub struct BotParams {
+    pub amount: U256,
+}
+
+/// 构造一次 bot run 对应的 inner calls。
+///
+/// Phase 1: 每条 TxRequest 作为 caller=safe 的单 tx 直接 simulate
+/// Phase 2/3: 全部打包成一笔 CoboSafeBuilder::build_txs
+/// Phase 4: 同 Phase 2/3
+pub fn build_inner_calls(params: &BotParams, safe: Address) -> Vec<TxRequest> {
+    // Claude: 按规格拼 inner calls
+    let target = Address::ZERO; // <- 填 Phase 0 查到的 target 地址
+
+    let data = withdrawCall {
+        token: Address::ZERO, // 按规格
+        amount: params.amount,
+        recipient: safe,
+    }
+    .abi_encode();
+
+    vec![TxRequest {
+        to: target,
+        value: U256::ZERO,
+        data: Bytes::from(data),
+        gas_limit: 500_000,
+    }]
+}

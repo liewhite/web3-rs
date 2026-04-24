@@ -1,0 +1,80 @@
+// Phase 2: ACL + 全权限链 fork 测试。
+//
+// Claude: 填 <PROJECT_NAME>、ACL 合约名、<COBOSAFE_ADDR>、<ROLE_MANAGER_ADDR>
+// ACL 产物路径固定 <project>/contracts/out/<Name>ACL.sol/<Name>ACL.json
+
+use alloy::primitives::{address, Address, B256, U256};
+use eyre::Result;
+
+use web3_rs::{
+    simulator::assertions::{assert_events_in_order, ExpectedEvent},
+    utils::{cobosafe, foundry, testing::testing_delegate},
+    AbiDecoder, CoboSafeBuilder, ForkSimulator, TxBuilder, TxSigner,
+};
+
+use <PROJECT_NAME>::{build_inner_calls, BotParams};
+
+const RPC_URL: &str = env!("RPC_URL");
+const COBOSAFE: Address = address!("<COBOSAFE_ADDR>");
+const ROLE_MANAGER: Address = address!("<ROLE_MANAGER_ADDR>");
+const ACL_ADDR: Address = address!("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"); // 任意测试地址
+const CHAIN_ID: u64 = 1;
+
+const ACL_ARTIFACT: &str = "../contracts/out/<ACL_NAME>.sol/<ACL_NAME>.json";
+
+#[tokio::test]
+#[ignore = "fork test"]
+async fn full_chain_happy() -> Result<()> {
+    let mut sim = ForkSimulator::fork_for_simulation(RPC_URL, None).await?;
+
+    // Claude: 应用 Phase 0 环境 mock
+
+    // 部署 ACL
+    let artifact = foundry::load_artifact(ACL_ARTIFACT)?;
+    sim.set_code(ACL_ADDR, artifact.deployed_bytecode.into())?;
+
+    // 权限链
+    let (signer, delegate) = testing_delegate();
+    let setup = cobosafe::setup_fork_test_env(&mut sim, COBOSAFE, ACL_ADDR, delegate)?;
+
+    // role grant
+    let role = cobosafe::role_name_to_bytes32("<ROLE_NAME>");
+    cobosafe::add_roles(&mut sim, setup.safe, ROLE_MANAGER, &[role])?;
+    cobosafe::grant_roles(&mut sim, setup.safe, ROLE_MANAGER, &[role], &[delegate])?;
+
+    // 构造 + 签名 + fork 广播
+    let params = BotParams {
+        amount: U256::from(1_000_000_000_000_000_000u128),
+    };
+    let requests = build_inner_calls(&params, setup.safe);
+
+    let builder = CoboSafeBuilder::new(COBOSAFE, CHAIN_ID);
+    let unsigned = builder.build_txs(&requests, 0, 0, 0)?;
+    let tx = unsigned.into_iter().next().expect("one tx");
+    let raw = signer.sign(tx).await?;
+
+    let result = sim.simulate_raw_tx(&raw.0)?;
+    eyre::ensure!(
+        result.success,
+        "execTransactions reverted: {:?}",
+        result.revert_reason
+    );
+
+    // Claude: 注册业务相关 ABI 并断言事件
+    // let mut decoder = AbiDecoder::new();
+    // decoder.register_abi(TARGET, target_abi);
+    // assert_events_in_order(&result.logs, &decoder, &[
+    //     ExpectedEvent { address: TARGET, event: "Withdraw", params: vec![...] },
+    // ])?;
+
+    Ok(())
+}
+
+/// Negative: 构造不该过的 inner call，ACL 应该让外层 revert。
+#[tokio::test]
+#[ignore = "fork test"]
+async fn full_chain_rejects_bad_recipient() -> Result<()> {
+    // Claude: 按 ACL negative 生成对应 Rust 侧用例
+    // 每条 ACL require() 至少一个对应的 Rust negative 断言
+    Ok(())
+}

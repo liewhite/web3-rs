@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+// Claude 指南：
+// - 继承 cobosafe v1.0.3 的 BaseACL（不是 BaseAuthorizer；BaseACL 多了 self-call 检查）
+// - `NAME` 取小写下划线形式如 `"my_bot_acl"`
+// - `contracts()` 返回 ACL 允许的目标合约地址数组（白名单，ACL 只放行这些合约的 call）
+// - 每个允许的业务方法写同名 **external** 函数，签名和 target 合约完全一致；函数体只有
+//   `require(...)` 检查参数，不做业务。BaseACL 会在 preExecCheck 自动 staticcall 同名方法
+// - 把 Phase 0 执行规格里的每条约束翻成一个 require。每条 require 的 "reason string" 写
+//   清楚原因，方便 Phase 2 Rust 测试按 revert_reason 断言
+
+import "cobosafe/contracts/base/BaseACL.sol";
+
+contract MyBotACL is BaseACL {
+    bytes32 public constant NAME = "my_bot_acl";
+    uint256 public constant VERSION = 1;
+
+    // 允许的 target 合约地址
+    address internal constant TARGET_PROTOCOL = 0x0000000000000000000000000000000000000000;
+
+    // 业务约束参数（可从 config 传 or 硬编码）
+    address internal immutable safeAddress;
+    uint256 internal constant MAX_AMOUNT = 100 ether;
+
+    constructor(address _safe) {
+        safeAddress = _safe;
+    }
+
+    function contracts() public view override returns (address[] memory _contracts) {
+        _contracts = new address[](1);
+        _contracts[0] = TARGET_PROTOCOL;
+    }
+
+    // Claude: 为 Phase 0 规格里每个业务方法写一个同名函数。
+    // 例：TARGET_PROTOCOL.withdraw(address token, uint256 amount, address recipient)
+    function withdraw(address token, uint256 amount, address recipient) external view {
+        // 按规格约束逐条 require
+        require(recipient == safeAddress, "recipient must be safe");
+        require(amount > 0 && amount <= MAX_AMOUNT, "amount out of range");
+        // ... token 白名单等
+    }
+}

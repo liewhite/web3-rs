@@ -1,0 +1,59 @@
+// Phase 1: Safe 直发 POC —— 绕过 ACL + delegate + cs-signer，证明业务可做。
+//
+// Claude: 把 <PROJECT_NAME> 和 target 具体 sol! 接口填进去。不要改 build_inner_calls
+// 的调用路径 —— Phase 2/3 都用同一个函数。
+//
+// 这份测试**不进最终 production/**，只在 skill 开发期间辅助。
+
+use alloy::primitives::{address, Address, Bytes, TxKind, U256};
+use eyre::Result;
+use revm::context::TxEnv;
+
+use web3_rs::{utils::cobosafe, ForkSimulator};
+
+use <PROJECT_NAME>::{build_inner_calls, BotParams};
+
+const RPC_URL: &str = env!("RPC_URL"); // Phase 1 从 env 拿；生产 bin 才硬编码
+const COBOSAFE: Address = address!("<COBOSAFE_ADDR>");
+
+#[tokio::test]
+#[ignore = "fork test, set RPC_URL env"]
+async fn safe_direct_happy() -> Result<()> {
+    let mut sim = ForkSimulator::fork_for_simulation(RPC_URL, None).await?;
+    let safe = cobosafe::get_safe(&sim, COBOSAFE)?;
+
+    // Claude: 应用 Phase 0 规格里的环境 mock
+    // sim.set_timestamp(<...>);
+    // sim.set_storage(<switch_contract>, <slot>, U256::ONE);
+    // 或 replay admin 调用：
+    // sim.simulate_and_commit(TxEnv { caller: ADMIN, kind: TxKind::Call(X), data: set_switch_calldata(true), ..Default::default() })?;
+
+    let params = BotParams {
+        amount: U256::from(1_000_000_000_000_000_000u128), // 1.0 unit
+    };
+    let requests = build_inner_calls(&params, safe);
+
+    // caller = safe，逐条直调（Phase 1 不打包）
+    for req in &requests {
+        let tx = TxEnv {
+            caller: safe,
+            kind: TxKind::Call(req.to),
+            data: req.data.clone(),
+            value: req.value,
+            gas_limit: req.gas_limit,
+            ..Default::default()
+        };
+        let r = sim.simulate_and_commit(tx)?;
+        eyre::ensure!(
+            r.success,
+            "inner call to {:?} reverted: {:?}",
+            req.to,
+            r.revert_reason
+        );
+    }
+
+    // Claude: 断言业务结果（余额变化 / state 变化）
+    // 例：let aweth_after = erc20::balance(&sim, AWETH, safe)?; assert!(aweth_after < aweth_before);
+
+    Ok(())
+}

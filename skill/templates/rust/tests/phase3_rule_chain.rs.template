@@ -1,0 +1,95 @@
+// Phase 3: rule.js + 本地 cs-signer 全路径 fork 测试。
+//
+// 前置：skill/scripts/start_local_signer.sh 已经在 127.0.0.1:<PORT> 启动 cs-signer，
+//      加载了 <project>/signer/ 的配置。run_phase3.sh 负责启停。
+//
+// rule.js 放行 + ACL 放行 → result.success；rule.js 拒绝 → sign() 返回 Err。
+
+use alloy::primitives::{address, Address, U256};
+use eyre::Result;
+
+use web3_rs::{
+    utils::{
+        cobosafe, foundry,
+        testing::{testing_delegate, TESTING_SIGNER_AUTH_SEED},
+    },
+    CoboSafeBuilder, ForkSimulator, RemoteSigner, TxBuilder, TxSigner,
+};
+
+use <PROJECT_NAME>::{build_inner_calls, BotParams};
+
+const RPC_URL: &str = env!("RPC_URL");
+const COBOSAFE: Address = address!("<COBOSAFE_ADDR>");
+const ROLE_MANAGER: Address = address!("<ROLE_MANAGER_ADDR>");
+const ACL_ADDR: Address = address!("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
+const CHAIN_ID: u64 = 1;
+
+/// cs-signer 在 run_phase3.sh 里启动时把端口写到 CS_SIGNER_PORT env
+fn signer_url() -> String {
+    let port = std::env::var("CS_SIGNER_PORT").unwrap_or_else(|_| "8080".into());
+    format!("http://127.0.0.1:{port}")
+}
+
+#[tokio::test]
+#[ignore = "需要本地 cs-signer"]
+async fn rule_chain_happy() -> Result<()> {
+    let mut sim = ForkSimulator::fork_for_simulation(RPC_URL, None).await?;
+    // Claude: 环境 mock
+
+    // 部署 ACL + 配权限（和 Phase 2 一样）
+    let artifact = foundry::load_artifact("../contracts/out/<ACL_NAME>.sol/<ACL_NAME>.json")?;
+    sim.set_code(ACL_ADDR, artifact.deployed_bytecode.into())?;
+
+    let (_, delegate) = testing_delegate();
+    let setup = cobosafe::setup_fork_test_env(&mut sim, COBOSAFE, ACL_ADDR, delegate)?;
+    let role = cobosafe::role_name_to_bytes32("<ROLE_NAME>");
+    cobosafe::add_roles(&mut sim, setup.safe, ROLE_MANAGER, &[role])?;
+    cobosafe::grant_roles(&mut sim, setup.safe, ROLE_MANAGER, &[role], &[delegate])?;
+
+    // 连本地 signer（用 testing 的 ed25519 seed 和 delegate 私钥对齐）
+    let signer = RemoteSigner::new(
+        signer_url(),
+        "TEST".into(),
+        TESTING_SIGNER_AUTH_SEED,
+        0,
+    )
+    .await?;
+
+    // 构造 tx
+    let params = BotParams {
+        amount: U256::from(1_000_000_000_000_000_000u128),
+    };
+    let requests = build_inner_calls(&params, setup.safe);
+    let builder = CoboSafeBuilder::new(COBOSAFE, CHAIN_ID);
+    let unsigned = builder.build_txs(&requests, 0, 0, 0)?;
+    let tx = unsigned.into_iter().next().expect("one tx");
+
+    // rule.js 在 signer 内跑；通过则返回 raw
+    let raw = signer
+        .sign(tx)
+        .await
+        .map_err(|e| eyre::eyre!("rule.js 拒绝了合法 tx（或 signer 连接失败）: {e}"))?;
+
+    // fork 广播验 ACL
+    let result = sim.simulate_raw_tx(&raw.0)?;
+    eyre::ensure!(
+        result.success,
+        "ACL 拒绝了 rule.js 放行的 tx（漂移）: {:?}",
+        result.revert_reason
+    );
+
+    Ok(())
+}
+
+/// Negative: rule.js 应该拒绝的 tx
+#[tokio::test]
+#[ignore = "需要本地 cs-signer"]
+async fn rule_chain_rejects_bad_tx() -> Result<()> {
+    let mut sim = ForkSimulator::fork_for_simulation(RPC_URL, None).await?;
+    // Claude: 构造按规格应被 rule 拒绝的 tx
+    let _ = &mut sim;
+    // let signer = RemoteSigner::new(...).await?;
+    // let err = signer.sign(bad_tx).await;
+    // assert!(err.is_err(), "rule.js 放过了应拒的 tx");
+    Ok(())
+}

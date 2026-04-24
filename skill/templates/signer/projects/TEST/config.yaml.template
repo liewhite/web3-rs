@@ -1,0 +1,15 @@
+# cs-signer TEST project 配置（skill Phase 3 专用）
+# public_keys: utils::testing::testing_signer_auth_pubkey_hex() 对齐
+# accounts:    utils::testing::TESTING_DELEGATE_PRIVKEY 对齐
+# 两者都是公开值，仅供 fork 测试使用。
+
+public_keys:
+  "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394": "skill-client"
+
+accounts:
+  - type: PlainPrivateKey
+    key: "0101010101010101010101010101010101010101010101010101010101010101"
+
+ip_whitelist:
+  - "127.0.0.1"
+  - "::1"
